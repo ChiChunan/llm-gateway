@@ -69,7 +69,6 @@ def test_earliest_recovery_time():
 
 def test_handle_429_unknown_channel():
     mgr = make_manager()
-    # Should not crash on unknown channel
     mgr.handle_429("nonexistent", "error message")
 
 
@@ -77,3 +76,41 @@ def test_handle_429_with_default_ban():
     mgr = make_manager()
     mgr.handle_429("ark", "Rate limit exceeded without reset time")
     assert mgr.is_available("ark") is False
+
+
+# ---- plan 联动测试 ----
+
+def make_manager_with_plans():
+    plans = {
+        "ark": {"channels": ["doubao-seed-2-0-pro", "glm-5-1"]},
+        "kimi": {"channels": ["kimi-for-coding"]},
+        "minimax": {"channels": ["MiniMax-M2.7-highspeed"]},
+    }
+    return ChannelManager(
+        channels=["doubao-seed-2-0-pro", "glm-5-1", "kimi-for-coding", "MiniMax-M2.7-highspeed"],
+        plans=plans,
+    )
+
+def test_handle_429_marks_entire_plan_unavailable():
+    mgr = make_manager_with_plans()
+    msg = "You have exceeded the 5-hour usage quota. It will reset at 2026-04-23 17:01:14 +0800 CST."
+    mgr.handle_429("glm-5-1", msg)
+    assert mgr.is_available("glm-5-1") is False
+    assert mgr.is_available("doubao-seed-2-0-pro") is False
+    assert mgr.is_available("kimi-for-coding") is True
+    assert mgr.is_available("MiniMax-M2.7-highspeed") is True
+
+def test_handle_429_same_reset_time_for_plan():
+    mgr = make_manager_with_plans()
+    msg = "You have exceeded the 5-hour usage quota. It will reset at 2026-04-23 17:01:14 +0800 CST."
+    mgr.handle_429("doubao-seed-2-0-pro", msg)
+    t1 = mgr._status["doubao-seed-2-0-pro"]
+    t2 = mgr._status["glm-5-1"]
+    assert t1 == t2
+
+def test_handle_429_no_plan_only_marks_single_channel():
+    mgr = ChannelManager(channels=["ark", "kimi"])
+    msg = "You have exceeded the 5-hour usage quota. It will reset at 2026-04-23 17:01:14 +0800 CST."
+    mgr.handle_429("ark", msg)
+    assert mgr.is_available("ark") is False
+    assert mgr.is_available("kimi") is True
