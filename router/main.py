@@ -27,28 +27,13 @@ def _require_env(name: str) -> str:
     return val
 
 
-def _optional_env(name: str, default: str) -> str:
-    return os.environ.get(name, default) or default
-
-
 cfg = load_config()
 
 NEW_API_BASE = _require_env("NEW_API_BASE")
 NEW_API_KEY = _require_env("NEW_API_KEY")
 
-KIMI_API_KEY = os.environ.get("KIMI_API_KEY", "")
-KIMI_BASE_URL = _optional_env("KIMI_BASE_URL", "https://api.moonshot.cn/v1")
-
-# ARK（火山引擎）—— new-api 渠道已配置，此处预留供未来直连扩展
-ARK_API_KEY = os.environ.get("ARK_API_KEY", "")
-ARK_BASE_URL = _optional_env("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
-
-# MiniMax —— new-api 渠道已配置，此处预留供未来直连扩展
-MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")
-MINIMAX_BASE_URL = _optional_env("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")
-
 channel_mgr = ChannelManager(
-    channels=["ark_lite", "ark_pro", "ark_glm", "kimi_8k", "kimi_128k"]
+    channels=["ark_lite", "ark_pro", "ark_glm"]
 )
 
 classifier = Classifier(
@@ -58,40 +43,9 @@ classifier = Classifier(
 )
 
 
-async def _kimi_balance_watcher():
-    interval = cfg.get("kimi", {}).get("balance_check_interval", 300)
-    warn_threshold = cfg.get("thresholds", {}).get("kimi_balance_warn", 10.0)
-
-    while True:
-        await asyncio.sleep(interval)
-        if not KIMI_API_KEY:
-            continue
-        try:
-            # 优先使用 routing.yaml 中配置的 balance_api，fallback 到拼接 URL
-            balance_url = cfg.get("kimi", {}).get("balance_api") or f"{KIMI_BASE_URL}/users/me/balance"
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
-                    balance_url,
-                    headers={"Authorization": f"Bearer {KIMI_API_KEY}"},
-                )
-                data = resp.json()
-                balance = float(data.get("balance", 9999))
-                for ch in ["kimi_8k", "kimi_128k"]:
-                    if balance < warn_threshold:
-                        channel_mgr.mark_unavailable(
-                            ch, until=datetime.now(CST) + timedelta(hours=24)
-                        )
-                    else:
-                        channel_mgr.mark_available(ch)
-        except Exception:
-            pass
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(_kimi_balance_watcher())
     yield
-    task.cancel()
 
 
 app = FastAPI(lifespan=lifespan)

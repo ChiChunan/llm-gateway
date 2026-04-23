@@ -9,8 +9,6 @@ MODEL_TO_CHANNEL: dict[str, str] = {
     "doubao-seed-2-0-lite": "ark_lite",
     "doubao-seed-2-0-pro": "ark_pro",
     "glm-5-1": "ark_glm",
-    "moonshot-v1-8k": "kimi_8k",
-    "moonshot-v1-128k": "kimi_128k",
 }
 
 
