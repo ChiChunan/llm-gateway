@@ -14,9 +14,9 @@ services:
     restart: unless-stopped
 
   new-api:
-    image: calciumion/new-api:latest
+    image: calciumion/new-api:v0.6.8
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./new-api/config:/data
     environment:
