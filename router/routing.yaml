@@ -1,7 +1,36 @@
 routing:
-  simple: "MiniMax-M2.7-highspeed"
-  complex: "glm-5-1"
-  complex_fallback: "kimi-for-coding"
-  simple_fallback: "doubao-seed-2-0-pro"
-  fallback: "doubao-seed-2-0-pro"
   classifier: "doubao-seed-2-0-lite"
+
+  # 各档位候选列表，按优先级排序，路由层取第一个可用的
+  simple_candidates:
+    - "doubao-seed-2-0-pro"       # ARK plan
+
+  complex_candidates:
+    - "glm-5-1"                   # ARK plan
+    - "kimi-for-coding"           # Kimi plan
+    - "MiniMax-M2.7-highspeed"    # MiniMax plan
+
+  # simple 档 ARK 超限时的降级候选
+  simple_fallback_candidates:
+    - "kimi-for-coding"
+    - "MiniMax-M2.7-highspeed"
+
+# plan 级别联动：任意渠道触发 429，同 plan 下所有渠道一起标记
+plans:
+  ark:
+    channels:
+      - "doubao-seed-2-0-pro"
+      - "glm-5-1"
+  kimi:
+    channels:
+      - "kimi-for-coding"
+  minimax:
+    channels:
+      - "MiniMax-M2.7-highspeed"
+
+thresholds:
+  kimi_balance_warn: 10.0
+
+kimi:
+  balance_check_interval: 300
+  balance_api: "https://platform.kimi.com/v1/users/me/balance"
