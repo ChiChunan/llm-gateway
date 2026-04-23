@@ -1,0 +1,24 @@
+services:
+  router:
+    build: ./router
+    ports:
+      - "8000:8000"
+    environment:
+      - NEW_API_BASE=http://new-api:3000
+      - NEW_API_KEY=${NEW_API_KEY}
+      - KIMI_API_KEY=${KIMI_API_KEY}
+    volumes:
+      - ./router/routing.yaml:/app/routing.yaml
+    depends_on:
+      - new-api
+    restart: unless-stopped
+
+  new-api:
+    image: calciumion/new-api:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./new-api/config:/data
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
