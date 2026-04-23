@@ -28,17 +28,25 @@ async def forward_request(
     target_model: str,
     new_api_base: str,
     new_api_key: str,
+    on_error: "callable | None" = None,
 ) -> StreamingResponse | JSONResponse:
     """转发请求到 new-api，流式请求透传 SSE，非流式返回 JSON。"""
     payload = build_forwarded_request(body, target_model)
     is_stream = payload.get("stream", False)
     if is_stream:
-        return await _stream_response(payload, new_api_base, new_api_key)
+        return await _stream_response(payload, new_api_base, new_api_key, on_error=on_error)
     return await _json_response(payload, new_api_base, new_api_key)
 
 
-async def _stream_response(payload: dict, base: str, key: str) -> StreamingResponse:
-    """逐字节透传 SSE 流式响应。"""
+async def _stream_response(
+    payload: dict,
+    base: str,
+    key: str,
+    on_error: "callable | None" = None,
+) -> StreamingResponse:
+    """逐字节透传 SSE 流式响应，上游错误通过 on_error callback 通知调用方。"""
+    import json as _json
+
     async def generate():
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             async with client.stream(
@@ -47,9 +55,11 @@ async def _stream_response(payload: dict, base: str, key: str) -> StreamingRespo
                 headers={"Authorization": f"Bearer {key}"},
                 json=payload,
             ) as resp:
-                # 上游返回 4xx/5xx 时透传错误，避免静默吞掉
+                # 上游返回 4xx/5xx 时，通知调用方并透传错误事件
                 if resp.status_code >= 400:
-                    import json as _json
+                    body_bytes = await resp.aread()
+                    if on_error is not None:
+                        await on_error(resp.status_code, body_bytes.decode(errors="replace"))
                     err = _json.dumps({"error": "upstream error", "status": resp.status_code})
                     yield f"data: {err}\n\n".encode()
                     return

@@ -67,9 +67,11 @@ async def _kimi_balance_watcher():
         if not KIMI_API_KEY:
             continue
         try:
+            # 优先使用 routing.yaml 中配置的 balance_api，fallback 到拼接 URL
+            balance_url = cfg.get("kimi", {}).get("balance_api") or f"{KIMI_BASE_URL}/users/me/balance"
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
-                    f"{KIMI_BASE_URL}/users/me/balance",
+                    balance_url,
                     headers={"Authorization": f"Bearer {KIMI_API_KEY}"},
                 )
                 data = resp.json()
@@ -146,8 +148,21 @@ async def chat_completions(request: Request):
         target_model = fallback_model
         channel = fallback_channel
 
+    async def _on_upstream_error(status_code: int, body: str):
+        """流式请求上游错误回调：429 时触发渠道标记。"""
+        if status_code == 429:
+            import json as _json
+            try:
+                err_msg = _json.loads(body).get("error", {}).get("message", body)
+            except Exception:
+                err_msg = body
+            channel_mgr.handle_429(channel, err_msg)
+
     try:
-        return await forward_request(body, target_model, NEW_API_BASE, NEW_API_KEY)
+        return await forward_request(
+            body, target_model, NEW_API_BASE, NEW_API_KEY,
+            on_error=_on_upstream_error,
+        )
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:
             err_body = e.response.json()
