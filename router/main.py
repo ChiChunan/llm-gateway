@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+import asyncio
+>>>>>>> 595ce8e (fix: main.py 代码规范修复（import 位置、注释补充）)
 import json as _json
 import os
 from contextlib import asynccontextmanager
@@ -153,6 +157,7 @@ async def chat_completions(request: Request):
                     "earliest_recovery": earliest.isoformat() if earliest else None,
                 },
             )
+
 
     # 流式请求的 429 通过回调触发；非流式请求的 429 通过下方 except 捕获
     async def _on_upstream_error(status_code: int, body: str):
