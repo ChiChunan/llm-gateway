@@ -6,8 +6,9 @@ _TIMEOUT = httpx.Timeout(10.0, read=120.0)
 
 # 模型名到渠道标识的映射表
 MODEL_TO_CHANNEL: dict[str, str] = {
-    "doubao-lite-32k": "volc_lite",
-    "doubao-pro-128k": "volc_pro",
+    "doubao-seed-2-0-lite": "ark_lite",
+    "doubao-seed-2-0-pro": "ark_pro",
+    "glm-5-1": "ark_glm",
     "moonshot-v1-8k": "kimi_8k",
     "moonshot-v1-128k": "kimi_128k",
 }

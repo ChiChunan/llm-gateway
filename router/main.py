@@ -48,7 +48,7 @@ MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")
 MINIMAX_BASE_URL = _optional_env("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")
 
 channel_mgr = ChannelManager(
-    channels=["volc_lite", "volc_pro", "kimi_8k", "kimi_128k"]
+    channels=["ark_lite", "ark_pro", "ark_glm", "kimi_8k", "kimi_128k"]
 )
 
 classifier = Classifier(

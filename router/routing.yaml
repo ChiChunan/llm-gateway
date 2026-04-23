@@ -1,8 +1,8 @@
 routing:
-  simple: "doubao-lite-32k"
-  complex: "doubao-pro-128k"
-  fallback: "doubao-pro-128k"
-  classifier: "doubao-lite-32k"
+  simple: "doubao-seed-2-0-pro"
+  complex: "glm-5-1"
+  fallback: "doubao-seed-2-0-pro"
+  classifier: "doubao-seed-2-0-lite"
 
 thresholds:
   kimi_balance_warn: 10.0
