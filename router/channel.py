@@ -40,14 +40,21 @@ class ChannelManager:
             return None
         raw = match.group(1).strip()
         # 去除末尾时区名称标签（如 " CST"），保留 +0800 偏移量
-        raw = re.sub(r'\s+[A-Z]{2,4}$', '', raw)
+        raw = re.sub(r'\s+CST$', '', raw)
         try:
-            return datetime.fromisoformat(raw)
+            dt = datetime.fromisoformat(raw)
+            # 确保返回的 datetime 带时区信息，避免与 aware datetime 比较时抛 TypeError
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=CST)
+            return dt
         except ValueError:
             return None
 
     def handle_429(self, channel: str, error_message: str):
         """处理 429 限流：解析重置时间，无法解析则默认封禁 5 小时"""
+        # guard：channel 不存在时直接返回，避免静默创建新 key
+        if channel not in self._status:
+            return
         reset = self.parse_reset_time(error_message)
         if reset:
             self.mark_unavailable(channel, until=reset)
