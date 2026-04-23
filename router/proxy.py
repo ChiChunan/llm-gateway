@@ -1,6 +1,9 @@
 import httpx
 from fastapi.responses import StreamingResponse, JSONResponse
 
+# connect 超时 10s，read 超时 120s（兼顾快速失败与长流式响应）
+_TIMEOUT = httpx.Timeout(10.0, read=120.0)
+
 # 模型名到渠道标识的映射表
 MODEL_TO_CHANNEL: dict[str, str] = {
     "doubao-lite-32k": "volc_lite",
@@ -37,13 +40,19 @@ async def forward_request(
 async def _stream_response(payload: dict, base: str, key: str) -> StreamingResponse:
     """逐字节透传 SSE 流式响应。"""
     async def generate():
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             async with client.stream(
                 "POST",
                 f"{base}/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json=payload,
             ) as resp:
+                # 上游返回 4xx/5xx 时透传错误，避免静默吞掉
+                if resp.status_code >= 400:
+                    import json as _json
+                    err = _json.dumps({"error": "upstream error", "status": resp.status_code})
+                    yield f"data: {err}\n\n".encode()
+                    return
                 async for chunk in resp.aiter_bytes():
                     yield chunk
 
@@ -52,10 +61,15 @@ async def _stream_response(payload: dict, base: str, key: str) -> StreamingRespo
 
 async def _json_response(payload: dict, base: str, key: str) -> JSONResponse:
     """发送普通请求并返回 JSON 响应。"""
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {key}"},
             json=payload,
         )
-    return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    # 防御上游返回非 JSON 内容导致解析异常
+    try:
+        content = resp.json()
+    except Exception:
+        content = {"error": "invalid upstream response", "raw": resp.text[:500]}
+    return JSONResponse(content=content, status_code=resp.status_code)
