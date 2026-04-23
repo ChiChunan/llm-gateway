@@ -33,15 +33,23 @@ def _optional_env(name: str, default: str) -> str:
 
 cfg = load_config()
 
-channel_mgr = ChannelManager(
-    channels=["volc_lite", "volc_pro", "kimi_8k", "kimi_128k"]
-)
-
 NEW_API_BASE = _require_env("NEW_API_BASE")
 NEW_API_KEY = _require_env("NEW_API_KEY")
 
 KIMI_API_KEY = os.environ.get("KIMI_API_KEY", "")
 KIMI_BASE_URL = _optional_env("KIMI_BASE_URL", "https://api.moonshot.cn/v1")
+
+# ARK（火山引擎）—— new-api 渠道已配置，此处预留供未来直连扩展
+ARK_API_KEY = os.environ.get("ARK_API_KEY", "")
+ARK_BASE_URL = _optional_env("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
+
+# MiniMax —— new-api 渠道已配置，此处预留供未来直连扩展
+MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")
+MINIMAX_BASE_URL = _optional_env("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")
+
+channel_mgr = ChannelManager(
+    channels=["volc_lite", "volc_pro", "kimi_8k", "kimi_128k"]
+)
 
 classifier = Classifier(
     base_url=NEW_API_BASE,
@@ -72,9 +80,7 @@ async def _kimi_balance_watcher():
                             ch, until=datetime.now(CST) + timedelta(hours=24)
                         )
                     else:
-                        channel_mgr.mark_unavailable(
-                            ch, until=datetime.now(CST) - timedelta(seconds=1)
-                        )
+                        channel_mgr.mark_available(ch)
         except Exception:
             pass
 

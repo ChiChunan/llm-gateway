@@ -24,6 +24,11 @@ class ChannelManager:
         """将渠道标记为不可用，直到指定时间"""
         self._status[channel] = until
 
+    def mark_available(self, channel: str):
+        """立即恢复渠道为可用状态"""
+        if channel in self._status:
+            self._status[channel] = None
+
     def available_channels(self) -> list[str]:
         """返回当前所有可用渠道列表"""
         return [c for c in self._status if self.is_available(c)]
