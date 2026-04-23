@@ -4,9 +4,14 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - NEW_API_BASE=http://new-api:3000
+      - NEW_API_BASE=http://new-api:3000/v1
       - NEW_API_KEY=${NEW_API_KEY}
+      - ARK_API_KEY=${ARK_API_KEY}
+      - ARK_BASE_URL=${ARK_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
       - KIMI_API_KEY=${KIMI_API_KEY}
+      - KIMI_BASE_URL=${KIMI_BASE_URL:-https://api.moonshot.cn/v1}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimax.chat/v1}
     volumes:
       - ./router/routing.yaml:/app/routing.yaml
     depends_on:
