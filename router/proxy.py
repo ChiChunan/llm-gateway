@@ -64,6 +64,7 @@ async def forward_request(
     channel: str,
     provider: ProviderConfig,
     on_error: "Callable | None" = None,
+    role: str = "unknown",
 ) -> StreamingResponse | JSONResponse:
     """Forward request to the appropriate provider, streaming SSE or returning JSON."""
     payload = build_forwarded_request(body, target_model)
@@ -71,8 +72,8 @@ async def forward_request(
     start = time.monotonic()
 
     if is_stream:
-        return await _stream_response(payload, target_model, channel, provider, start, on_error=on_error)
-    return await _json_response(payload, target_model, channel, provider, start)
+        return await _stream_response(payload, target_model, channel, provider, start, on_error=on_error, role=role)
+    return await _json_response(payload, target_model, channel, provider, start, role=role)
 
 
 async def _stream_response(
@@ -82,6 +83,7 @@ async def _stream_response(
     provider: ProviderConfig,
     start: float,
     on_error: "Callable | None" = None,
+    role: str = "unknown",
 ) -> StreamingResponse:
     """Stream SSE response byte-by-byte, notify caller of upstream errors via on_error callback.
 
@@ -107,31 +109,25 @@ async def _stream_response(
                     yield f"data: {err}\n\n".encode()
                     # Record failed request
                     latency = int((time.monotonic() - start) * 1000)
-                    db.record(target_model, channel, status_code=resp.status_code, latency_ms=latency)
+                    db.record(target_model, channel, role=role, status_code=resp.status_code, latency_ms=latency)
                     return
                 async for line in resp.aiter_lines():
-                    # Try to extract usage from this line
                     usage = _parse_usage_from_chunk(line)
                     if usage is not None:
                         accumulated_usage = usage
-                    # Forward the raw line
                     yield (line + "\n\n").encode("utf-8")
 
-        # After stream ends, record usage
         latency = int((time.monotonic() - start) * 1000)
         if accumulated_usage:
             db.record(
-                target_model,
-                channel,
+                target_model, channel, role=role,
                 prompt_tokens=accumulated_usage["prompt_tokens"],
                 completion_tokens=accumulated_usage["completion_tokens"],
                 cached_tokens=accumulated_usage["cached_tokens"],
-                status_code=200,
-                latency_ms=latency,
+                status_code=200, latency_ms=latency,
             )
         else:
-            # Stream completed but no usage block — still record the request
-            db.record(target_model, channel, status_code=200, latency_ms=latency)
+            db.record(target_model, channel, role=role, status_code=200, latency_ms=latency)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -142,6 +138,7 @@ async def _json_response(
     channel: str,
     provider: ProviderConfig,
     start: float,
+    role: str = "unknown",
 ) -> JSONResponse:
     """Send a non-streaming request and return the JSON response.
 
@@ -160,22 +157,19 @@ async def _json_response(
         content = resp.json()
     except Exception:
         content = {"error": "invalid upstream response", "raw": resp.text[:500]}
-        db.record(target_model, channel, status_code=resp.status_code, latency_ms=latency)
+        db.record(target_model, channel, role=role, status_code=resp.status_code, latency_ms=latency)
         return JSONResponse(content=content, status_code=resp.status_code)
 
-    # Extract usage from response
     usage = content.get("usage")
     if usage and isinstance(usage, dict):
         db.record(
-            target_model,
-            channel,
+            target_model, channel, role=role,
             prompt_tokens=usage.get("prompt_tokens", 0) or 0,
             completion_tokens=usage.get("completion_tokens", 0) or 0,
             cached_tokens=usage.get("prompt_tokens_details", {}).get("cached_tokens", 0) or 0,
-            status_code=resp.status_code,
-            latency_ms=latency,
+            status_code=resp.status_code, latency_ms=latency,
         )
     else:
-        db.record(target_model, channel, status_code=resp.status_code, latency_ms=latency)
+        db.record(target_model, channel, role=role, status_code=resp.status_code, latency_ms=latency)
 
     return JSONResponse(content=content, status_code=resp.status_code)

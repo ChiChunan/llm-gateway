@@ -270,10 +270,12 @@ async def chat_completions(request: Request):
                 _record_failure(_m)
                 channel_mgr.mark_unavailable(_m, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(_m)))
 
+        role_str = requested_model if requested_model != "auto" else complexity.value
         try:
             resp = await forward_request(
                 body, attempt_model, get_channel_for_model(attempt_model), attempt_provider,
                 on_error=_on_upstream_error,
+                role=role_str,
             )
             _clear_failure(attempt_model)
             return resp

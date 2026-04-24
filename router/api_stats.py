@@ -46,6 +46,13 @@ async def stats_hourly(date: Optional[str] = None):
     return {"data": db.get_hourly(date=date)}
 
 
+@router.get("/roles")
+async def stats_roles(since: Optional[str] = None, until: Optional[str] = None):
+    """Request count grouped by routing role."""
+    db = get_usage_db()
+    return {"data": db.get_role_stats(since=since, until=until)}
+
+
 @router.get("/totals")
 async def stats_totals():
     """Lifetime totals."""

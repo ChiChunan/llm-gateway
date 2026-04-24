@@ -52,6 +52,7 @@ class UsageDB:
                     timestamp TEXT NOT NULL,
                     model TEXT NOT NULL,
                     channel TEXT NOT NULL,
+                    role TEXT DEFAULT 'unknown',
                     prompt_tokens INTEGER DEFAULT 0,
                     completion_tokens INTEGER DEFAULT 0,
                     cached_tokens INTEGER DEFAULT 0,
@@ -60,6 +61,11 @@ class UsageDB:
                     latency_ms INTEGER
                 )
             """)
+            # 兼容旧表：若 role 列不存在则添加
+            try:
+                conn.execute("ALTER TABLE usage_logs ADD COLUMN role TEXT DEFAULT 'unknown'")
+            except Exception:
+                pass
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_usage_timestamp
                 ON usage_logs(timestamp)
@@ -73,6 +79,7 @@ class UsageDB:
         self,
         model: str,
         channel: str,
+        role: str = "unknown",
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         cached_tokens: int = 0,
@@ -84,13 +91,14 @@ class UsageDB:
         with self._conn() as conn:
             conn.execute(
                 """INSERT INTO usage_logs
-                   (timestamp, model, channel, prompt_tokens, completion_tokens,
+                   (timestamp, model, channel, role, prompt_tokens, completion_tokens,
                     cached_tokens, request_id, status_code, latency_ms)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     _now_iso(),
                     model,
                     channel,
+                    role,
                     prompt_tokens,
                     completion_tokens,
                     cached_tokens,
@@ -189,6 +197,30 @@ class UsageDB:
                 WHERE timestamp >= ? AND timestamp <= ?
                 GROUP BY hour, model
                 ORDER BY hour ASC, request_count DESC
+                """,
+                (since, until),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_role_stats(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> list[dict]:
+        """Get request count grouped by role."""
+        if since is None:
+            since = (datetime.now(CST) - timedelta(days=7)).isoformat()
+        if until is None:
+            until = datetime.now(CST).isoformat()
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT role, COUNT(*) as request_count,
+                       SUM(prompt_tokens) as total_prompt_tokens,
+                       SUM(completion_tokens) as total_completion_tokens
+                FROM usage_logs
+                WHERE timestamp >= ? AND timestamp <= ?
+                GROUP BY role ORDER BY request_count DESC
                 """,
                 (since, until),
             ).fetchall()

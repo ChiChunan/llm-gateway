@@ -114,6 +114,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Role stats -->
+    <div class="charts-row" style="grid-template-columns:1fr 1fr;margin-bottom:24px;">
+      <div class="chart-card">
+        <h3>路由分工分布</h3>
+        <div class="chart-wrap"><canvas id="roleChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>分工 Token 消耗</h3>
+        <div class="chart-wrap"><canvas id="roleTokenChart"></canvas></div>
+      </div>
+    </div>
+
     <!-- Model summary table -->
     <div class="table-card">
       <h3>模型用量汇总</h3>
@@ -340,10 +352,61 @@ async function loadLogs() {
   }
 }
 
+const ROLE_COLORS = {
+  coordinator: '#a855f7',
+  writer: '#22c55e',
+  executor: '#3b82f6',
+  unknown: '#64748b',
+};
+
+let roleChartInstance = null;
+let roleTokenChartInstance = null;
+
+async function loadRoleCharts() {
+  const resp = await fetchJSON('/api/stats/roles');
+  const rows = resp.data || [];
+
+  const labels = rows.map(r => r.role);
+  const counts = rows.map(r => r.request_count);
+  const prompts = rows.map(r => r.total_prompt_tokens || 0);
+  const completions = rows.map(r => r.total_completion_tokens || 0);
+  const bgColors = labels.map(r => ROLE_COLORS[r] || '#64748b');
+
+  if (roleChartInstance) roleChartInstance.destroy();
+  roleChartInstance = new Chart(document.getElementById('roleChart'), {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data: counts, backgroundColor: bgColors, borderWidth: 2, borderColor: '#1e293b' }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } }
+    }
+  });
+
+  if (roleTokenChartInstance) roleTokenChartInstance.destroy();
+  roleTokenChartInstance = new Chart(document.getElementById('roleTokenChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '输入', data: prompts, backgroundColor: bgColors.map(c => c + '99'), borderRadius: 3 },
+        { label: '输出', data: completions, backgroundColor: bgColors, borderRadius: 3 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' }, beginAtZero: true }
+      }
+    }
+  });
+}
+
 async function loadAll() {
   document.getElementById('totalReqs').textContent = '...';
   try {
-    await Promise.all([loadStats(), loadDaily(7), loadTokenChart(7), loadLogs()]);
+    await Promise.all([loadStats(), loadDaily(7), loadTokenChart(7), loadLogs(), loadRoleCharts()]);
   } catch(e) {
     console.error(e);
   }
