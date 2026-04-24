@@ -53,7 +53,7 @@ class Classifier:
             content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
         return str(content)[:1000]
 
-    async def _call_llm(self, content: str) -> str:
+    async def _call_llm(self, content: str, on_429=None) -> str:
         from usage import get_usage_db
         from providers import get_channel_for_model
         prompt = CLASSIFY_PROMPT.format(content=content)
@@ -85,13 +85,20 @@ class Classifier:
                 )
             except Exception:
                 pass
+            if resp.status_code == 429 and on_429:
+                err_msg = ""
+                try:
+                    err_msg = resp.json().get("error", {}).get("message", "")
+                except Exception:
+                    pass
+                on_429(self._model, err_msg)
             resp.raise_for_status()
             return data["choices"][0]["message"]["content"]
 
-    async def classify(self, last_user_message: str) -> Complexity:
+    async def classify(self, last_user_message: str, on_429=None) -> Complexity:
         # 任何异常（超时、解析失败）均降级为 executor
         try:
-            raw = await self._call_llm(last_user_message)
+            raw = await self._call_llm(last_user_message, on_429=on_429)
             data = json.loads(raw.strip())
             return Complexity(data["role"])
         except Exception:

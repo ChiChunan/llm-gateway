@@ -209,7 +209,7 @@ async def chat_completions(request: Request):
             for m in ["doubao-seed-2-0-lite", "doubao-seed-2-0-pro", "glm-5-1"]
         )
         active_classifier = classifier if ark_available else (fallback_classifier or classifier)
-        complexity = await active_classifier.classify(last_msg)
+        complexity = await active_classifier.classify(last_msg, on_429=channel_mgr.handle_429)
         session_key = _get_session_key(messages)
 
         if complexity == Complexity.COORDINATOR:
