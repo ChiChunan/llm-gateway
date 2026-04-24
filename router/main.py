@@ -48,8 +48,11 @@ if not providers:
     raise RuntimeError("No LLM providers configured. Set at least one of: ARK_API_KEY, KIMI_API_KEY, MINIMAX_API_KEY")
 
 # ChannelManager 用 model name 粒度，支持 plan 联动
+# 分类器模型也纳入管理，确保 ark plan 429 时能被联动封禁
+_classifier_models = [m for m in [cfg["routing"].get("classifier")] if m]
 _all_models = list(dict.fromkeys(
-    cfg["routing"].get("coordinator_candidates", [])
+    _classifier_models
+    + cfg["routing"].get("coordinator_candidates", [])
     + cfg["routing"].get("writer_candidates", [])
     + cfg["routing"].get("executor_candidates", [])
     + cfg["routing"].get("coordinator_fallback", [])

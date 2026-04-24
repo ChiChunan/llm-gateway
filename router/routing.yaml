@@ -30,6 +30,7 @@ routing:
 plans:
   ark:
     channels:
+      - "doubao-seed-2-0-lite"
       - "doubao-seed-2-0-pro"
       - "glm-5-1"
   kimi:
