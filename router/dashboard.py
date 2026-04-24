@@ -121,7 +121,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="chart-wrap"><canvas id="roleChart"></canvas></div>
       </div>
       <div class="chart-card">
-        <h3>模型请求次数分布</h3>
+        <h3>路由模型用量</h3>
         <div class="chart-wrap"><canvas id="modelReqChart"></canvas></div>
       </div>
     </div>
@@ -382,17 +382,17 @@ async function loadRoleCharts() {
     }
   });
 
-  // 模型请求次数分布
-  const modelResp = await fetchJSON('/api/stats/summary?group_by=model');
-  const modelRows = modelResp.data || [];
-  const modelLabels = modelRows.map(r => r.grp);
-  const modelCounts = modelRows.map(r => r.request_count);
-  const modelColors = modelLabels.map(m => getColor(m));
+  // 路由模型用量分布（分类器调用次数）
+  const classifierResp = await fetchJSON('/api/stats/classifier');
+  const classifierRows = classifierResp.data || [];
+  const classifierLabels = classifierRows.map(r => r.grp);
+  const classifierCounts = classifierRows.map(r => r.request_count);
+  const classifierColors = classifierLabels.map(m => getColor(m));
 
   if (roleTokenChartInstance) roleTokenChartInstance.destroy();
   roleTokenChartInstance = new Chart(document.getElementById('modelReqChart'), {
     type: 'doughnut',
-    data: { labels: modelLabels, datasets: [{ data: modelCounts, backgroundColor: modelColors, borderWidth: 2, borderColor: '#1e293b' }] },
+    data: { labels: classifierLabels, datasets: [{ data: classifierCounts, backgroundColor: classifierColors, borderWidth: 2, borderColor: '#1e293b' }] },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } }
