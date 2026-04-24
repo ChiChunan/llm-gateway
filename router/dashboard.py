@@ -121,8 +121,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="chart-wrap"><canvas id="roleChart"></canvas></div>
       </div>
       <div class="chart-card">
-        <h3>分工 Token 消耗</h3>
-        <div class="chart-wrap"><canvas id="roleTokenChart"></canvas></div>
+        <h3>模型请求次数分布</h3>
+        <div class="chart-wrap"><canvas id="modelReqChart"></canvas></div>
       </div>
     </div>
 
@@ -382,23 +382,20 @@ async function loadRoleCharts() {
     }
   });
 
+  // 模型请求次数分布
+  const modelResp = await fetchJSON('/api/stats/summary?group_by=model');
+  const modelRows = modelResp.data || [];
+  const modelLabels = modelRows.map(r => r.grp);
+  const modelCounts = modelRows.map(r => r.request_count);
+  const modelColors = modelLabels.map(m => getColor(m));
+
   if (roleTokenChartInstance) roleTokenChartInstance.destroy();
-  roleTokenChartInstance = new Chart(document.getElementById('roleTokenChart'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: '输入', data: prompts, backgroundColor: bgColors.map(c => c + '99'), borderRadius: 3 },
-        { label: '输出', data: completions, backgroundColor: bgColors, borderRadius: 3 },
-      ]
-    },
+  roleTokenChartInstance = new Chart(document.getElementById('modelReqChart'), {
+    type: 'doughnut',
+    data: { labels: modelLabels, datasets: [{ data: modelCounts, backgroundColor: modelColors, borderWidth: 2, borderColor: '#1e293b' }] },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
-      scales: {
-        x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
-        y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' }, beginAtZero: true }
-      }
+      plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } }
     }
   });
 }
