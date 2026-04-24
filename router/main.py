@@ -203,27 +203,66 @@ async def chat_completions(request: Request):
             )
 
 
-    # 流式请求的 429 通过回调触发；非流式请求的 429 通过下方 except 捕获
-    async def _on_upstream_error(status_code: int, body: str):
-        if status_code == 429:
+    # 构建完整候选列表用于降级重试
+    if requested_model != "auto":
+        retry_candidates = [(target_model, target_provider)]
+    else:
+        if complexity == Complexity.COORDINATOR:
+            all_candidates = routing.get("coordinator_candidates", []) + routing.get("coordinator_fallback", [])
+        elif complexity == Complexity.WRITER:
+            all_candidates = routing.get("writer_candidates", []) + routing.get("writer_fallback", [])
+        else:
+            all_candidates = routing.get("executor_candidates", []) + routing.get("executor_fallback", [])
+        # 去重保序，只保留当前可用的
+        seen = set()
+        retry_candidates = []
+        for m in all_candidates:
+            if m in seen:
+                continue
+            seen.add(m)
+            p = get_provider_for_model(m, providers)
+            if p and channel_mgr.is_available(m):
+                retry_candidates.append((m, p))
+
+    last_error = None
+    for attempt_model, attempt_provider in retry_candidates:
+        # 流式请求的 429 通过回调触发；非流式请求的 429 通过下方 except 捕获
+        async def _on_upstream_error(status_code: int, body: str, _m=attempt_model):
             try:
                 err_msg = _json.loads(body).get("error", {}).get("message", body)
             except Exception:
                 err_msg = body
-            channel_mgr.handle_429(target_model, err_msg)
+            if status_code == 429:
+                channel_mgr.handle_429(_m, err_msg)
+            else:
+                channel_mgr.mark_unavailable(_m, until=datetime.now(CST) + timedelta(seconds=60))
 
-    try:
-        return await forward_request(
-            body, target_model, get_channel_for_model(target_model), target_provider,
-            on_error=_on_upstream_error,
-        )
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 429:
-            err_body = e.response.json()
-            err_msg = err_body.get("error", {}).get("message", "")
-            channel_mgr.handle_429(target_model, err_msg)
-            return JSONResponse(
-                status_code=503,
-                content={"error": "rate limited", "detail": err_msg},
+        try:
+            return await forward_request(
+                body, attempt_model, get_channel_for_model(attempt_model), attempt_provider,
+                on_error=_on_upstream_error,
             )
-        return JSONResponse(status_code=502, content={"error": "upstream error"})
+        except httpx.HTTPStatusError as e:
+            err_msg = ""
+            try:
+                err_msg = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                pass
+            if e.response.status_code == 429:
+                channel_mgr.handle_429(attempt_model, err_msg)
+            else:
+                channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=60))
+            last_error = f"{e.response.status_code}: {err_msg}"
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=60))
+            last_error = str(e)
+
+    earliest = channel_mgr.earliest_recovery()
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "all candidates failed",
+            "last_error": last_error,
+            "earliest_recovery": earliest.isoformat() if earliest else None,
+        },
+    )
