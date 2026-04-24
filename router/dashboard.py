@@ -203,28 +203,46 @@ async function loadStats() {
 }
 
 async function loadDaily(days = 7) {
-  const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
-  const resp = await fetchJSON('/api/stats/daily?since=' + since);
-  const rows = resp.data || [];
+  let labels, dataMap, modelSet = new Set();
 
-  // 生成完整日期序列，无数据的日期填 0
-  const allDates = [];
-  for (let i = days - 1; i >= 0; i--) {
-    allDates.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
-  }
-
-  const dateMap = {};
-  const modelSet = new Set();
-  for (const r of rows) {
-    modelSet.add(r.model);
-    if (!dateMap[r.date]) dateMap[r.date] = {};
-    dateMap[r.date][r.model] = r.request_count;
+  if (days === 1) {
+    // 今天：按小时展示
+    const resp = await fetchJSON('/api/stats/hourly');
+    const rows = resp.data || [];
+    labels = Array.from({length: 24}, (_, i) => String(i).padStart(2, '0') + ':00');
+    dataMap = {};
+    for (const r of rows) {
+      modelSet.add(r.model);
+      if (!dataMap[r.hour]) dataMap[r.hour] = {};
+      dataMap[r.hour][r.model] = r.request_count;
+    }
+    var getVal = (m, i) => dataMap[i]?.[m] || 0;
+    var xLabels = labels;
+    var xKeys = Array.from({length: 24}, (_, i) => i);
+  } else {
+    // 多天：按日期展示
+    const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
+    const resp = await fetchJSON('/api/stats/daily?since=' + since);
+    const rows = resp.data || [];
+    const allDates = [];
+    for (let i = days - 1; i >= 0; i--) {
+      allDates.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+    }
+    dataMap = {};
+    for (const r of rows) {
+      modelSet.add(r.model);
+      if (!dataMap[r.date]) dataMap[r.date] = {};
+      dataMap[r.date][r.model] = r.request_count;
+    }
+    var getVal = (m, d) => dataMap[d]?.[m] || 0;
+    var xLabels = allDates;
+    var xKeys = allDates;
   }
 
   const models = [...modelSet];
   const datasets = models.map(m => ({
     label: m,
-    data: allDates.map(d => dateMap[d]?.[m] || 0),
+    data: xKeys.map(k => getVal(m, k)),
     borderColor: getColor(m),
     backgroundColor: getColor(m) + '99',
     fill: true,
@@ -236,7 +254,7 @@ async function loadDaily(days = 7) {
   if (dailyChartInstance) dailyChartInstance.destroy();
   dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
     type: 'line',
-    data: { labels: allDates, datasets },
+    data: { labels: xLabels, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },

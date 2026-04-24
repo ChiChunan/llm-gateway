@@ -39,6 +39,13 @@ async def stats_logs(
     return {"data": db.get_recent_logs(limit=limit, offset=offset)}
 
 
+@router.get("/hourly")
+async def stats_hourly(date: Optional[str] = None):
+    """Hourly usage breakdown for a given date (default: today)."""
+    db = get_usage_db()
+    return {"data": db.get_hourly(date=date)}
+
+
 @router.get("/totals")
 async def stats_totals():
     """Lifetime totals."""

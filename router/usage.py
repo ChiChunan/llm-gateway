@@ -169,6 +169,31 @@ class UsageDB:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def get_hourly(self, date: Optional[str] = None) -> list[dict]:
+        """Get hourly usage breakdown for a given date (default: today)."""
+        if date is None:
+            date = datetime.now(CST).strftime("%Y-%m-%d")
+        since = f"{date}T00:00:00"
+        until = f"{date}T23:59:59"
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    CAST(strftime('%H', timestamp) AS INTEGER) as hour,
+                    model,
+                    channel,
+                    COUNT(*) as request_count,
+                    SUM(prompt_tokens) as total_prompt_tokens,
+                    SUM(completion_tokens) as total_completion_tokens
+                FROM usage_logs
+                WHERE timestamp >= ? AND timestamp <= ?
+                GROUP BY hour, model
+                ORDER BY hour ASC, request_count DESC
+                """,
+                (since, until),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def get_recent_logs(
         self,
         limit: int = 50,
