@@ -156,8 +156,6 @@ async def list_models():
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
-    import logging
-    logging.warning(f"HEADERS: {dict(request.headers)}")
     requested_model = body.get("model", "auto")
     messages = body.get("messages", [])
     routing = cfg["routing"]
