@@ -179,7 +179,7 @@ class UsageDB:
             rows = conn.execute(
                 """
                 SELECT
-                    CAST(strftime('%H', timestamp) AS INTEGER) as hour,
+                    CAST(strftime('%H', datetime(timestamp, '+8 hours')) AS INTEGER) as hour,
                     model,
                     channel,
                     COUNT(*) as request_count,
