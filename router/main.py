@@ -61,15 +61,36 @@ else:
     )
 
 
-def _pick_model(candidates: list[str]) -> tuple[str, object] | tuple[None, None]:
-    """遍历候选列表，返回第一个可用且有 provider 的 (model, provider)。"""
-    for model in candidates:
+def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[str, object] | tuple[None, None]:
+    """遍历候选列表，返回第一个可用且有 provider 的 (model, provider)。
+
+    session_key 非空时做一致性哈希：同一 session 固定起始模型，不可用时顺移。
+    """
+    if not candidates:
+        return None, None
+    if session_key:
+        import hashlib
+        start = int(hashlib.md5(session_key.encode()).hexdigest(), 16) % len(candidates)
+        ordered = candidates[start:] + candidates[:start]
+    else:
+        ordered = candidates
+    for model in ordered:
         if not channel_mgr.is_available(model):
             continue
         provider = get_provider_for_model(model, providers)
         if provider is not None:
             return model, provider
     return None, None
+
+
+def _get_session_key(messages: list[dict]) -> str | None:
+    """取 messages[0] 的内容前 200 字符作为 session 标识。"""
+    if not messages:
+        return None
+    content = messages[0].get("content", "")
+    if isinstance(content, list):
+        content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return str(content)[:200] or None
 
 
 @asynccontextmanager
@@ -135,14 +156,14 @@ async def chat_completions(request: Request):
     else:
         last_msg = classifier.extract_last_user_message(messages)
         complexity = await classifier.classify(last_msg)
+        session_key = _get_session_key(messages)
 
         if complexity == Complexity.SIMPLE:
-            target_model, target_provider = _pick_model(routing.get("simple_candidates", []))
+            target_model, target_provider = _pick_model(routing.get("simple_candidates", []), session_key)
             if target_model is None:
-                # ARK 超限，降级到 S 档非 ARK 候选
-                target_model, target_provider = _pick_model(routing.get("simple_fallback_candidates", []))
+                target_model, target_provider = _pick_model(routing.get("simple_fallback_candidates", []), session_key)
         else:
-            target_model, target_provider = _pick_model(routing.get("complex_candidates", []))
+            target_model, target_provider = _pick_model(routing.get("complex_candidates", []), session_key)
 
         if target_model is None:
             earliest = channel_mgr.earliest_recovery()
