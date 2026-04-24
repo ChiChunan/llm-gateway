@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-=======
-import asyncio
->>>>>>> 595ce8e (fix: main.py 代码规范修复（import 位置、注释补充）)
 import json as _json
 import os
 from contextlib import asynccontextmanager

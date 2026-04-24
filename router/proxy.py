@@ -13,8 +13,17 @@ _TIMEOUT = httpx.Timeout(10.0, read=120.0)
 
 
 def build_forwarded_request(original: dict, target_model: str) -> dict:
-    """Replace the model in the original request body, pass through everything else."""
-    return {**original, "model": target_model}
+    """Replace model and inject per-channel thinking-off params."""
+    payload = {**original, "model": target_model}
+    channel = get_channel_for_model(target_model)
+    if channel == "ark":
+        # ARK (doubao/glm): disable thinking via official param
+        payload.setdefault("thinking", {"type": "disabled"})
+    # MiniMax: no reliable disable param; ensure max_tokens is large enough
+    # that thinking doesn't consume the entire budget
+    if channel == "minimax" and payload.get("max_tokens", 4096) < 500:
+        payload["max_tokens"] = 500
+    return payload
 
 
 def extract_channel_from_model(model: str) -> str:
