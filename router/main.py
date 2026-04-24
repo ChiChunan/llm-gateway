@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from channel import ChannelManager
-from classifier import Classifier, Complexity
+from classifier import Classifier, ClassifyResult, Complexity
 from proxy import forward_request
 from providers import init_providers, get_channel_for_model, get_provider_for_model
 from usage import init_usage_db
@@ -208,15 +208,11 @@ async def chat_completions(request: Request):
             for m in ["doubao-seed-2-0-lite", "doubao-seed-2-0-pro", "glm-5-1"]
         )
         active_classifier = classifier if ark_available else (fallback_classifier or classifier)
-        complexity = await active_classifier.classify(last_msg, on_429=channel_mgr.handle_429)
-        # 主分类器 429 降级后立即用 fallback 重分类，避免用错误结果路由
-        if (
-            active_classifier is classifier
-            and complexity == Complexity.EXECUTOR
-            and not channel_mgr.is_available("doubao-seed-2-0-lite")
-            and fallback_classifier
-        ):
-            complexity = await fallback_classifier.classify(last_msg, on_429=channel_mgr.handle_429)
+        classify_result = await active_classifier.classify(last_msg, on_429=channel_mgr.handle_429)
+        # 主分类器失败时立即用 fallback 重分类
+        if classify_result is None and active_classifier is classifier and fallback_classifier:
+            classify_result = await fallback_classifier.classify(last_msg, on_429=channel_mgr.handle_429)
+        complexity = classify_result.complexity if classify_result else Complexity.EXECUTOR
         session_key = _get_session_key(messages)
 
         if complexity == Complexity.COORDINATOR:
@@ -288,6 +284,17 @@ async def chat_completions(request: Request):
                 role=role_str,
             )
             _clear_failure(attempt_model)
+            # 请求成功后才记录分类器用量，确保统计的是真正完成路由的次数
+            if requested_model == "auto" and classify_result:
+                from providers import get_channel_for_model as _gcfm
+                usage_db.record(
+                    model=classify_result.model,
+                    channel=_gcfm(classify_result.model),
+                    role="classifier",
+                    prompt_tokens=classify_result.prompt_tokens,
+                    completion_tokens=classify_result.completion_tokens,
+                    latency_ms=classify_result.latency_ms,
+                )
             return resp
         except httpx.HTTPStatusError as e:
             err_msg = ""

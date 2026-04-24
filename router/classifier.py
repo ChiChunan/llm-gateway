@@ -1,6 +1,8 @@
 import json
 import time
+from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 import httpx
 
 CLASSIFY_PROMPT = """\
@@ -36,6 +38,15 @@ class Complexity(str, Enum):
     EXECUTOR = "executor"
 
 
+@dataclass
+class ClassifyResult:
+    complexity: Complexity
+    model: str          # 实际执行分类的模型
+    prompt_tokens: int
+    completion_tokens: int
+    latency_ms: int
+
+
 class Classifier:
     def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 5.0, extra_body: dict | None = None):
         self._base_url = base_url
@@ -53,9 +64,8 @@ class Classifier:
             content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
         return str(content)[:1000]
 
-    async def _call_llm(self, content: str, on_429=None) -> str:
-        from usage import get_usage_db
-        from providers import get_channel_for_model
+    async def _call_llm(self, content: str, on_429=None) -> tuple[str, dict, int]:
+        """返回 (content, usage, latency_ms)"""
         prompt = CLASSIFY_PROMPT.format(content=content)
         start = time.monotonic()
         async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -71,20 +81,6 @@ class Classifier:
                 },
             )
             latency = int((time.monotonic() - start) * 1000)
-            try:
-                data = resp.json()
-                usage = data.get("usage", {}) or {}
-                get_usage_db().record(
-                    model=self._model,
-                    channel=get_channel_for_model(self._model),
-                    role="classifier",
-                    prompt_tokens=usage.get("prompt_tokens", 0) or 0,
-                    completion_tokens=usage.get("completion_tokens", 0) or 0,
-                    status_code=resp.status_code,
-                    latency_ms=latency,
-                )
-            except Exception:
-                pass
             if resp.status_code == 429 and on_429:
                 err_msg = ""
                 try:
@@ -93,13 +89,21 @@ class Classifier:
                     pass
                 on_429(self._model, err_msg)
             resp.raise_for_status()
-            return data["choices"][0]["message"]["content"]
+            data = resp.json()
+            usage = data.get("usage", {}) or {}
+            return data["choices"][0]["message"]["content"], usage, latency
 
-    async def classify(self, last_user_message: str, on_429=None) -> Complexity:
-        # 任何异常（超时、解析失败）均降级为 executor
+    async def classify(self, last_user_message: str, on_429=None) -> Optional[ClassifyResult]:
+        """分类成功返回 ClassifyResult，失败返回 None（调用方负责降级）"""
         try:
-            raw = await self._call_llm(last_user_message, on_429=on_429)
+            raw, usage, latency = await self._call_llm(last_user_message, on_429=on_429)
             data = json.loads(raw.strip())
-            return Complexity(data["role"])
+            return ClassifyResult(
+                complexity=Complexity(data["role"]),
+                model=self._model,
+                prompt_tokens=usage.get("prompt_tokens", 0) or 0,
+                completion_tokens=usage.get("completion_tokens", 0) or 0,
+                latency_ms=latency,
+            )
         except Exception:
-            return Complexity.EXECUTOR
+            return None
