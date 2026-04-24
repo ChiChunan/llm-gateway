@@ -3,17 +3,17 @@ routing:
 
   # 各档位候选列表，按优先级排序，路由层取第一个可用的
   simple_candidates:
-    - "doubao-seed-2-0-pro"       # ARK plan
+    - "MiniMax-M2.7-highspeed"    # MiniMax plan
+    - "doubao-seed-2-0-pro"       # ARK plan fallback
 
   complex_candidates:
     - "glm-5-1"                   # ARK plan
     - "kimi-for-coding"           # Kimi plan
     - "MiniMax-M2.7-highspeed"    # MiniMax plan
 
-  # simple 档 ARK 超限时的降级候选
+  # simple 档 MiniMax + ARK 均超限时的降级候选
   simple_fallback_candidates:
     - "kimi-for-coding"
-    - "MiniMax-M2.7-highspeed"
 
 # plan 级别联动：任意渠道触发 429，同 plan 下所有渠道一起标记
 plans:
