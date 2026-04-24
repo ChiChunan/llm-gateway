@@ -99,12 +99,12 @@ def _get_session_key(messages: list[dict]) -> str | None:
 
 GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "V.A.L.O.R.")
 
-_PUBLIC_PATHS = {"/health", "/dashboard", "/stats"}
+_PUBLIC_PATHS = {"/health", "/dashboard"}
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in _PUBLIC_PATHS or request.url.path.startswith("/static"):
+        if request.url.path in _PUBLIC_PATHS or request.url.path.startswith("/static") or request.url.path.startswith("/api/stats"):
             return await call_next(request)
         auth = request.headers.get("Authorization", "")
         if auth != f"Bearer {GATEWAY_API_KEY}":
