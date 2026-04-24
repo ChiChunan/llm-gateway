@@ -35,11 +35,12 @@ class Complexity(str, Enum):
 
 
 class Classifier:
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 5.0):
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 5.0, extra_body: dict | None = None):
         self._base_url = base_url
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+        self._extra_body = extra_body or {}
 
     def extract_last_user_message(self, messages: list[dict]) -> str:
         user_msgs = [m for m in messages if m.get("role") == "user"]
@@ -61,6 +62,7 @@ class Classifier:
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 20,
                     "temperature": 0,
+                    **self._extra_body,
                 },
             )
             resp.raise_for_status()

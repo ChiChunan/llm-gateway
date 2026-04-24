@@ -85,6 +85,7 @@ fallback_classifier = Classifier(
     base_url=minimax_provider.base_url,
     api_key=minimax_provider.api_key,
     model="MiniMax-M2.7-highspeed",
+    extra_body={"max_tokens": 50},  # MiniMax 无法关闭 thinking，加大 max_tokens 保证 content 有输出
 ) if minimax_provider else None
 
 
