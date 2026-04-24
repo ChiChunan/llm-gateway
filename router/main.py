@@ -203,13 +203,20 @@ async def chat_completions(request: Request):
         target_model, target_provider = requested_model, provider
     else:
         last_msg = classifier.extract_last_user_message(messages)
-        # ARK plan 不可用时切换到 MiniMax 分类器
         ark_available = any(
             channel_mgr.is_available(m)
             for m in ["doubao-seed-2-0-lite", "doubao-seed-2-0-pro", "glm-5-1"]
         )
         active_classifier = classifier if ark_available else (fallback_classifier or classifier)
         complexity = await active_classifier.classify(last_msg, on_429=channel_mgr.handle_429)
+        # 主分类器 429 降级后立即用 fallback 重分类，避免用错误结果路由
+        if (
+            active_classifier is classifier
+            and complexity == Complexity.EXECUTOR
+            and not channel_mgr.is_available("doubao-seed-2-0-lite")
+            and fallback_classifier
+        ):
+            complexity = await fallback_classifier.classify(last_msg, on_429=channel_mgr.handle_429)
         session_key = _get_session_key(messages)
 
         if complexity == Complexity.COORDINATOR:
