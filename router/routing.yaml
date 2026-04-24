@@ -1,5 +1,7 @@
 routing:
-  simple: "doubao-seed-2-0-pro"
+  simple: "MiniMax-M2.7-highspeed"
   complex: "glm-5-1"
+  complex_fallback: "kimi-for-coding"
+  simple_fallback: "doubao-seed-2-0-pro"
   fallback: "doubao-seed-2-0-pro"
   classifier: "doubao-seed-2-0-lite"

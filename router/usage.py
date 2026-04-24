@@ -1,0 +1,219 @@
+"""Usage tracking: SQLite-based request count and token consumption per model."""
+
+import json
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Optional
+
+CST = timezone(timedelta(hours=8))
+
+DB_PATH = Path(__file__).parent / "data" / "usage.db"
+
+
+def _now_iso() -> str:
+    return datetime.now(CST).isoformat()
+
+
+class UsageDB:
+    """Thread-safe SQLite usage tracker."""
+
+    def __init__(self, db_path: str | Path = DB_PATH):
+        self._db_path = Path(db_path)
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
+        self._init_db()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            self._local.conn = sqlite3.connect(str(self._db_path), timeout=10)
+            self._local.conn.row_factory = sqlite3.Row
+            self._local.conn.execute("PRAGMA journal_mode=WAL")
+        return self._local.conn
+
+    @contextmanager
+    def _conn(self):
+        conn = self._get_conn()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def _init_db(self):
+        with self._conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS usage_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    prompt_tokens INTEGER DEFAULT 0,
+                    completion_tokens INTEGER DEFAULT 0,
+                    cached_tokens INTEGER DEFAULT 0,
+                    request_id TEXT,
+                    status_code INTEGER,
+                    latency_ms INTEGER
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_usage_timestamp
+                ON usage_logs(timestamp)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_usage_model
+                ON usage_logs(model)
+            """)
+
+    def record(
+        self,
+        model: str,
+        channel: str,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cached_tokens: int = 0,
+        request_id: str | None = None,
+        status_code: int = 200,
+        latency_ms: int | None = None,
+    ):
+        """Record a single request's usage data."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO usage_logs
+                   (timestamp, model, channel, prompt_tokens, completion_tokens,
+                    cached_tokens, request_id, status_code, latency_ms)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    _now_iso(),
+                    model,
+                    channel,
+                    prompt_tokens,
+                    completion_tokens,
+                    cached_tokens,
+                    request_id,
+                    status_code,
+                    latency_ms,
+                ),
+            )
+
+    def get_summary(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        group_by: str = "model",
+    ) -> list[dict]:
+        """Get aggregated usage summary.
+
+        Args:
+            since: ISO timestamp start (default: 7 days ago)
+            until: ISO timestamp end (default: now)
+            group_by: "model" or "channel"
+        """
+        if since is None:
+            since = (datetime.now(CST) - timedelta(days=7)).isoformat()
+        if until is None:
+            until = datetime.now(CST).isoformat()
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    {group_by} as grp,
+                    channel as grp_channel,
+                    COUNT(*) as request_count,
+                    SUM(prompt_tokens) as total_prompt_tokens,
+                    SUM(completion_tokens) as total_completion_tokens,
+                    SUM(cached_tokens) as total_cached_tokens,
+                    AVG(latency_ms) as avg_latency_ms
+                FROM usage_logs
+                WHERE timestamp >= ? AND timestamp <= ?
+                GROUP BY {group_by}, channel
+                ORDER BY request_count DESC
+                """,
+                (since, until),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_daily(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> list[dict]:
+        """Get daily usage breakdown across all models."""
+        if since is None:
+            since = (datetime.now(CST) - timedelta(days=7)).isoformat()
+        if until is None:
+            until = datetime.now(CST).isoformat()
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    DATE(timestamp) as date,
+                    model,
+                    channel,
+                    COUNT(*) as request_count,
+                    SUM(prompt_tokens) as total_prompt_tokens,
+                    SUM(completion_tokens) as total_completion_tokens,
+                    SUM(cached_tokens) as total_cached_tokens
+                FROM usage_logs
+                WHERE timestamp >= ? AND timestamp <= ?
+                GROUP BY DATE(timestamp), model
+                ORDER BY date DESC, request_count DESC
+                """,
+                (since, until),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_recent_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Get recent raw usage log entries."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM usage_logs
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_total_stats(self) -> dict:
+        """Get overall lifetime stats."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) as total_requests,
+                    SUM(prompt_tokens) as total_prompt_tokens,
+                    SUM(completion_tokens) as total_completion_tokens,
+                    SUM(cached_tokens) as total_cached_tokens
+                FROM usage_logs
+                """
+            ).fetchone()
+            return dict(row) if row else {}
+
+
+# Singleton — initialized once at import time
+_db: UsageDB | None = None
+
+
+def init_usage_db(db_path: str | Path = DB_PATH) -> UsageDB:
+    global _db
+    _db = UsageDB(db_path)
+    return _db
+
+
+def get_usage_db() -> UsageDB:
+    global _db
+    if _db is None:
+        _db = UsageDB()
+    return _db
