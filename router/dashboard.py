@@ -89,7 +89,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <!-- Charts -->
-    <div class="charts-row">
+    <div style="margin-bottom:24px;">
       <div class="chart-card">
         <h3 style="display:flex;justify-content:space-between;align-items:center;">
           <span>每日请求数 (按模型)</span>
@@ -101,6 +101,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </h3>
         <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
       </div>
+    </div>
+
+    <div class="charts-row">
       <div class="chart-card">
         <h3 style="display:flex;justify-content:space-between;align-items:center;">
           <span>Token 消耗分布</span>
@@ -111,14 +114,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </span>
         </h3>
         <div class="chart-wrap"><canvas id="tokenChart"></canvas></div>
-      </div>
-    </div>
-
-    <!-- Role stats -->
-    <div class="charts-row" style="grid-template-columns:1fr 1fr;margin-bottom:24px;">
-      <div class="chart-card">
-        <h3>路由分工分布</h3>
-        <div class="chart-wrap"><canvas id="roleChart"></canvas></div>
       </div>
       <div class="chart-card">
         <h3>路由模型用量</h3>
@@ -352,47 +347,19 @@ async function loadLogs() {
   }
 }
 
-const ROLE_COLORS = {
-  coordinator: '#a855f7',
-  writer: '#22c55e',
-  executor: '#3b82f6',
-  unknown: '#64748b',
-};
+let routerChartInstance = null;
 
-let roleChartInstance = null;
-let roleTokenChartInstance = null;
-
-async function loadRoleCharts() {
-  const resp = await fetchJSON('/api/stats/roles');
+async function loadRouterChart() {
+  const resp = await fetchJSON('/api/stats/classifier');
   const rows = resp.data || [];
-
-  const labels = rows.map(r => r.role);
+  const labels = rows.map(r => r.grp);
   const counts = rows.map(r => r.request_count);
-  const prompts = rows.map(r => r.total_prompt_tokens || 0);
-  const completions = rows.map(r => r.total_completion_tokens || 0);
-  const bgColors = labels.map(r => ROLE_COLORS[r] || '#64748b');
+  const colors = labels.map(m => getColor(m));
 
-  if (roleChartInstance) roleChartInstance.destroy();
-  roleChartInstance = new Chart(document.getElementById('roleChart'), {
+  if (routerChartInstance) routerChartInstance.destroy();
+  routerChartInstance = new Chart(document.getElementById('modelReqChart'), {
     type: 'doughnut',
-    data: { labels, datasets: [{ data: counts, backgroundColor: bgColors, borderWidth: 2, borderColor: '#1e293b' }] },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } }
-    }
-  });
-
-  // 路由模型用量分布（分类器调用次数）
-  const classifierResp = await fetchJSON('/api/stats/classifier');
-  const classifierRows = classifierResp.data || [];
-  const classifierLabels = classifierRows.map(r => r.grp);
-  const classifierCounts = classifierRows.map(r => r.request_count);
-  const classifierColors = classifierLabels.map(m => getColor(m));
-
-  if (roleTokenChartInstance) roleTokenChartInstance.destroy();
-  roleTokenChartInstance = new Chart(document.getElementById('modelReqChart'), {
-    type: 'doughnut',
-    data: { labels: classifierLabels, datasets: [{ data: classifierCounts, backgroundColor: classifierColors, borderWidth: 2, borderColor: '#1e293b' }] },
+    data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 2, borderColor: '#1e293b' }] },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } }
@@ -403,7 +370,7 @@ async function loadRoleCharts() {
 async function loadAll() {
   document.getElementById('totalReqs').textContent = '...';
   try {
-    await Promise.all([loadStats(), loadDaily(7), loadTokenChart(7), loadLogs(), loadRoleCharts()]);
+    await Promise.all([loadStats(), loadDaily(7), loadTokenChart(7), loadLogs(), loadRouterChart()]);
   } catch(e) {
     console.error(e);
   }
