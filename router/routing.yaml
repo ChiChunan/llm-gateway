@@ -28,9 +28,3 @@ plans:
     channels:
       - "MiniMax-M2.7-highspeed"
 
-thresholds:
-  kimi_balance_warn: 10.0
-
-kimi:
-  balance_check_interval: 300
-  balance_api: "https://platform.kimi.com/v1/users/me/balance"
