@@ -1,4 +1,5 @@
 import json as _json
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -253,7 +254,9 @@ async def chat_completions(request: Request):
                 retry_candidates.append((m, p))
 
     last_error = None
-    for attempt_model, attempt_provider in retry_candidates:
+    for i, (attempt_model, attempt_provider) in enumerate(retry_candidates):
+        if i > 0:
+            logging.warning(f"FALLBACK attempt {i}: {attempt_model} (prev error: {last_error})")
         # 流式请求的 429 通过回调触发；非流式请求的 429 通过下方 except 捕获
         async def _on_upstream_error(status_code: int, body: str, _m=attempt_model):
             try:
@@ -285,10 +288,12 @@ async def chat_completions(request: Request):
                 _record_failure(attempt_model)
                 channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(attempt_model)))
             last_error = f"{e.response.status_code}: {err_msg}"
+            logging.warning(f"FAIL {attempt_model}: {last_error}")
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             _record_failure(attempt_model)
             channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(attempt_model)))
             last_error = str(e)
+            logging.warning(f"FAIL {attempt_model}: {last_error}")
 
     earliest = channel_mgr.earliest_recovery()
     return JSONResponse(
