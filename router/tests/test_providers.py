@@ -53,7 +53,7 @@ def test_init_providers_all():
     assert "minimax" in providers
     assert providers["ark"].api_key == "ark-key"
     assert providers["kimi"].api_key == "kimi-key"
-    assert providers["kimi"].extra_headers == {"anthropic-version": "2023-06-01"}
+    assert providers["kimi"].extra_headers == {"anthropic-version": "2023-06-01", "User-Agent": "claude-code/1.0"}
     assert providers["minimax"].api_key == "minimax-key"
     assert providers["minimax"].base_url == "https://minimax.example.com/v1"
 

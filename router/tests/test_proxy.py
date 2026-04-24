@@ -21,9 +21,16 @@ def test_build_forwarded_request_preserves_other_fields():
         "temperature": 0.7,
         "max_tokens": 1000,
     }
-    result = build_forwarded_request(original, target_model="MiniMax-M2.7-highspeed")
+    # 非 MiniMax 模型，max_tokens 原样保留
+    result = build_forwarded_request(original, target_model="doubao-seed-2-0-pro")
     assert result["temperature"] == 0.7
     assert result["max_tokens"] == 1000
+
+
+def test_build_forwarded_request_minimax_bumps_max_tokens():
+    original = {"model": "auto", "messages": [], "max_tokens": 1000}
+    result = build_forwarded_request(original, target_model="MiniMax-M2.7-highspeed")
+    assert result["max_tokens"] == 8192
 
 
 def test_extract_channel_from_model_ark_lite():

@@ -4,21 +4,27 @@ from classifier import Classifier, Complexity
 
 
 @pytest.mark.asyncio
-async def test_classify_returns_simple():
+async def test_classify_returns_coordinator():
     clf = Classifier(base_url="http://localhost:3000/v1", api_key="test", model="doubao-seed-2-0-lite")
-    mock_response = '{"complexity": "simple"}'
-    with patch.object(clf, "_call_llm", new=AsyncMock(return_value=mock_response)):
-        result = await clf.classify("What is 2+2?")
-    assert result == Complexity.SIMPLE
+    with patch.object(clf, "_call_llm", new=AsyncMock(return_value='{"role": "coordinator"}')):
+        result = await clf.classify("帮我拆解这个项目的任务")
+    assert result == Complexity.COORDINATOR
 
 
 @pytest.mark.asyncio
-async def test_classify_returns_complex():
+async def test_classify_returns_writer():
     clf = Classifier(base_url="http://localhost:3000/v1", api_key="test", model="doubao-seed-2-0-lite")
-    mock_response = '{"complexity": "complex"}'
-    with patch.object(clf, "_call_llm", new=AsyncMock(return_value=mock_response)):
-        result = await clf.classify("Design a distributed cache system.")
-    assert result == Complexity.COMPLEX
+    with patch.object(clf, "_call_llm", new=AsyncMock(return_value='{"role": "writer"}')):
+        result = await clf.classify("帮我写一篇技术文档")
+    assert result == Complexity.WRITER
+
+
+@pytest.mark.asyncio
+async def test_classify_returns_executor():
+    clf = Classifier(base_url="http://localhost:3000/v1", api_key="test", model="doubao-seed-2-0-lite")
+    with patch.object(clf, "_call_llm", new=AsyncMock(return_value='{"role": "executor"}')):
+        result = await clf.classify("实现一个二分查找算法")
+    assert result == Complexity.EXECUTOR
 
 
 @pytest.mark.asyncio
@@ -26,7 +32,7 @@ async def test_classify_fallback_on_invalid_json():
     clf = Classifier(base_url="http://localhost:3000/v1", api_key="test", model="doubao-seed-2-0-lite")
     with patch.object(clf, "_call_llm", new=AsyncMock(return_value="not json")):
         result = await clf.classify("anything")
-    assert result == Complexity.COMPLEX
+    assert result == Complexity.EXECUTOR
 
 
 @pytest.mark.asyncio
@@ -34,7 +40,7 @@ async def test_classify_fallback_on_timeout():
     clf = Classifier(base_url="http://localhost:3000/v1", api_key="test", model="doubao-seed-2-0-lite")
     with patch.object(clf, "_call_llm", new=AsyncMock(side_effect=Exception("timeout"))):
         result = await clf.classify("anything")
-    assert result == Complexity.COMPLEX
+    assert result == Complexity.EXECUTOR
 
 
 def test_extract_last_user_message_basic():

@@ -1,19 +1,30 @@
 routing:
   classifier: "doubao-seed-2-0-lite"
 
-  # 各档位候选列表，按优先级排序，路由层取第一个可用的
-  simple_candidates:
-    - "MiniMax-M2.7-highspeed"    # MiniMax plan
-    - "doubao-seed-2-0-pro"       # ARK plan fallback
-
-  complex_candidates:
-    - "glm-5-1"                   # ARK plan
-    - "kimi-for-coding"           # Kimi plan
-    - "MiniMax-M2.7-highspeed"    # MiniMax plan
-
-  # simple 档 MiniMax + ARK 均超限时的降级候选
-  simple_fallback_candidates:
+  # coordinator：规划/拆解/分工 + 检查/review/验证
+  coordinator_candidates:
+    - "glm-5-1"
     - "kimi-for-coding"
+
+  # writer：文字/文档/总结/解释/翻译
+  writer_candidates:
+    - "doubao-seed-2-0-pro"
+
+  # executor：代码/工具调用/具体问答/其他
+  executor_candidates:
+    - "MiniMax-M2.7-highspeed"
+
+  coordinator_fallback:
+    - "MiniMax-M2.7-highspeed"
+    - "doubao-seed-2-0-pro"
+
+  writer_fallback:
+    - "MiniMax-M2.7-highspeed"
+    - "doubao-seed-2-0-pro"
+
+  executor_fallback:
+    - "MiniMax-M2.7-highspeed"
+    - "doubao-seed-2-0-pro"
 
 # plan 级别联动：任意渠道触发 429，同 plan 下所有渠道一起标记
 plans:

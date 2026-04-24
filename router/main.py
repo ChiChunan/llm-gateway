@@ -34,9 +34,12 @@ if not providers:
 
 # ChannelManager 用 model name 粒度，支持 plan 联动
 _all_models = list(dict.fromkeys(
-    cfg["routing"].get("simple_candidates", [])
-    + cfg["routing"].get("complex_candidates", [])
-    + cfg["routing"].get("simple_fallback_candidates", [])
+    cfg["routing"].get("coordinator_candidates", [])
+    + cfg["routing"].get("writer_candidates", [])
+    + cfg["routing"].get("executor_candidates", [])
+    + cfg["routing"].get("coordinator_fallback", [])
+    + cfg["routing"].get("writer_fallback", [])
+    + cfg["routing"].get("executor_fallback", [])
 ))
 
 channel_mgr = ChannelManager(
@@ -136,10 +139,11 @@ async def health():
 async def list_models():
     routing = cfg["routing"]
     all_candidates = (
-        routing.get("simple_candidates", [])
-        + routing.get("complex_candidates", [])
+        routing.get("coordinator_candidates", [])
+        + routing.get("writer_candidates", [])
+        + routing.get("executor_candidates", [])
     )
-    # simple_fallback_candidates 与 complex_candidates 重叠，不单独列出
+    # fallback candidates 与主候选重叠，不单独列出
     seen = set()
     models = [{"id": "auto", "object": "model"}]
     for m in all_candidates:
@@ -175,12 +179,18 @@ async def chat_completions(request: Request):
         complexity = await classifier.classify(last_msg)
         session_key = _get_session_key(messages)
 
-        if complexity == Complexity.SIMPLE:
-            target_model, target_provider = _pick_model(routing.get("simple_candidates", []), session_key)
+        if complexity == Complexity.COORDINATOR:
+            target_model, target_provider = _pick_model(routing.get("coordinator_candidates", []), session_key)
             if target_model is None:
-                target_model, target_provider = _pick_model(routing.get("simple_fallback_candidates", []), session_key)
-        else:
-            target_model, target_provider = _pick_model(routing.get("complex_candidates", []), session_key)
+                target_model, target_provider = _pick_model(routing.get("coordinator_fallback", []), session_key)
+        elif complexity == Complexity.WRITER:
+            target_model, target_provider = _pick_model(routing.get("writer_candidates", []), session_key)
+            if target_model is None:
+                target_model, target_provider = _pick_model(routing.get("writer_fallback", []), session_key)
+        else:  # EXECUTOR
+            target_model, target_provider = _pick_model(routing.get("executor_candidates", []), session_key)
+            if target_model is None:
+                target_model, target_provider = _pick_model(routing.get("executor_fallback", []), session_key)
 
         if target_model is None:
             earliest = channel_mgr.earliest_recovery()
