@@ -19,8 +19,8 @@ def build_forwarded_request(original: dict, target_model: str) -> dict:
         payload.setdefault("reasoning_effort", "minimal")
     elif target_model.startswith("glm"):
         payload.setdefault("thinking", {"type": "disabled"})
-    elif get_channel_for_model(target_model) == "minimax":
-        # MiniMax has no thinking-disable param; ensure budget isn't exhausted before content
+    else:
+        # Kimi / MiniMax: no thinking-disable param; ensure budget isn't exhausted before content
         if payload.get("max_tokens", 8192) < 8192:
             payload["max_tokens"] = 8192
     return payload

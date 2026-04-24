@@ -54,7 +54,10 @@ def init_providers() -> dict[str, ProviderConfig]:
         providers["kimi"] = ProviderConfig(
             base_url=kimi_base,
             api_key=kimi_key,
-            extra_headers={"anthropic-version": "2023-06-01"},
+            extra_headers={
+                "anthropic-version": "2023-06-01",
+                "User-Agent": "claude-code/1.0",
+            },
         )
 
     # MiniMax
