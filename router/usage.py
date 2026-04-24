@@ -239,6 +239,7 @@ class UsageDB:
             rows = conn.execute(
                 """
                 SELECT * FROM usage_logs
+                WHERE role != 'classifier'
                 ORDER BY id DESC
                 LIMIT ? OFFSET ?
                 """,
