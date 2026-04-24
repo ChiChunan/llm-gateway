@@ -1,4 +1,5 @@
 import json
+import time
 from enum import Enum
 import httpx
 
@@ -25,7 +26,7 @@ executor（以下情况）：
 {{"role": "coordinator"}} 或 {{"role": "writer"}} 或 {{"role": "executor"}}
 
 用户请求：
-{content}"""
+{content} 不要思考，直接给结果"""
 
 
 class Complexity(str, Enum):
@@ -52,7 +53,10 @@ class Classifier:
         return str(content)[:1000]
 
     async def _call_llm(self, content: str) -> str:
+        from usage import get_usage_db
+        from providers import get_channel_for_model
         prompt = CLASSIFY_PROMPT.format(content=content)
+        start = time.monotonic()
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(
                 f"{self._base_url}/chat/completions",
@@ -66,7 +70,22 @@ class Classifier:
                 },
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+            latency = int((time.monotonic() - start) * 1000)
+            data = resp.json()
+            usage = data.get("usage", {}) or {}
+            try:
+                get_usage_db().record(
+                    model=self._model,
+                    channel=get_channel_for_model(self._model),
+                    role="classifier",
+                    prompt_tokens=usage.get("prompt_tokens", 0) or 0,
+                    completion_tokens=usage.get("completion_tokens", 0) or 0,
+                    status_code=resp.status_code,
+                    latency_ms=latency,
+                )
+            except Exception:
+                pass
+            return data["choices"][0]["message"]["content"]
 
     async def classify(self, last_user_message: str) -> Complexity:
         # 任何异常（超时、解析失败）均降级为 executor
