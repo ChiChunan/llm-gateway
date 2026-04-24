@@ -7,6 +7,7 @@ import httpx
 import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from channel import ChannelManager
 from classifier import Classifier, Complexity
@@ -93,12 +94,28 @@ def _get_session_key(messages: list[dict]) -> str | None:
     return str(content)[:200] or None
 
 
+GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "V.A.L.O.R.")
+
+_PUBLIC_PATHS = {"/health", "/dashboard", "/stats"}
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in _PUBLIC_PATHS or request.url.path.startswith("/static"):
+            return await call_next(request)
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {GATEWAY_API_KEY}":
+            return JSONResponse(status_code=401, content={"error": "unauthorized"})
+        return await call_next(request)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(AuthMiddleware)
 
 app.include_router(stats_router)
 app.include_router(dashboard_router)
