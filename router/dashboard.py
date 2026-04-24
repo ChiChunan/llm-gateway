@@ -40,6 +40,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
   .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
   .chart-card h3 { font-size: 14px; color: var(--muted); margin-bottom: 16px; font-weight: 500; }
+  .day-btn { background: var(--border); border: none; color: var(--muted); padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  .day-btn.active { background: #3b82f6; color: #fff; }
+  .day-btn:hover:not(.active) { background: #334155; color: #e2e8f0; }
   .chart-wrap { position: relative; height: 260px; }
 
   /* Model table */
@@ -88,11 +91,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <!-- Charts -->
     <div class="charts-row">
       <div class="chart-card">
-        <h3>每日请求数 (按模型)</h3>
+        <h3 style="display:flex;justify-content:space-between;align-items:center;">
+          <span>每日请求数 (按模型)</span>
+          <span style="display:flex;gap:6px;">
+            <button class="day-btn active" data-days="7">近7天</button>
+            <button class="day-btn" data-days="3">近3天</button>
+            <button class="day-btn" data-days="1">今天</button>
+          </span>
+        </h3>
         <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
       </div>
       <div class="chart-card">
-        <h3>Token 消耗分布</h3>
+        <h3 style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Token 消耗分布</span>
+          <span style="display:flex;gap:6px;">
+            <button class="day-btn token-btn active" data-days="7">近7天</button>
+            <button class="day-btn token-btn" data-days="3">近3天</button>
+            <button class="day-btn token-btn" data-days="1">今天</button>
+          </span>
+        </h3>
         <div class="chart-wrap"><canvas id="tokenChart"></canvas></div>
       </div>
     </div>
@@ -185,27 +202,29 @@ async function loadStats() {
   }
 }
 
-async function loadDaily() {
-  const resp = await fetchJSON('/api/stats/daily');
+async function loadDaily(days = 7) {
+  const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
+  const resp = await fetchJSON('/api/stats/daily?since=' + since);
   const rows = resp.data || [];
 
-  // Group by date
+  // 生成完整日期序列，无数据的日期填 0
+  const allDates = [];
+  for (let i = days - 1; i >= 0; i--) {
+    allDates.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+  }
+
   const dateMap = {};
   const modelSet = new Set();
   for (const r of rows) {
-    const date = r.date;
-    const model = r.model;
-    modelSet.add(model);
-    if (!dateMap[date]) dateMap[date] = {};
-    dateMap[date][model] = r.request_count;
+    modelSet.add(r.model);
+    if (!dateMap[r.date]) dateMap[r.date] = {};
+    dateMap[r.date][r.model] = r.request_count;
   }
 
-  const dates = Object.keys(dateMap).sort();
   const models = [...modelSet];
-
   const datasets = models.map(m => ({
     label: m,
-    data: dates.map(d => dateMap[d]?.[m] || 0),
+    data: allDates.map(d => dateMap[d]?.[m] || 0),
     backgroundColor: getColor(m),
     borderRadius: 3,
   }));
@@ -213,7 +232,7 @@ async function loadDaily() {
   if (dailyChartInstance) dailyChartInstance.destroy();
   dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
     type: 'bar',
-    data: { labels: dates, datasets },
+    data: { labels: allDates, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
@@ -225,8 +244,27 @@ async function loadDaily() {
   });
 }
 
-async function loadTokenChart() {
-  const resp = await fetchJSON('/api/stats/summary?group_by=model');
+// 天数切换按钮事件
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.day-btn:not(.token-btn)').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.day-btn:not(.token-btn)').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadDaily(parseInt(btn.dataset.days));
+    });
+  });
+  document.querySelectorAll('.token-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.token-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadTokenChart(parseInt(btn.dataset.days));
+    });
+  });
+});
+
+async function loadTokenChart(days = 7) {
+  const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
+  const resp = await fetchJSON('/api/stats/summary?group_by=model&since=' + since);
   const rows = resp.data || [];
 
   const labels = rows.map(r => r.grp_model || r.grp || r.model || '-');
@@ -278,7 +316,7 @@ async function loadLogs() {
 async function loadAll() {
   document.getElementById('totalReqs').textContent = '...';
   try {
-    await Promise.all([loadStats(), loadDaily(), loadTokenChart(), loadLogs()]);
+    await Promise.all([loadStats(), loadDaily(7), loadTokenChart(7), loadLogs()]);
   } catch(e) {
     console.error(e);
   }
