@@ -46,6 +46,13 @@ async def stats_hourly(date: Optional[str] = None):
     return {"data": db.get_hourly(date=date)}
 
 
+@router.get("/classifier")
+async def stats_classifier(since: Optional[str] = None, until: Optional[str] = None):
+    """Classifier model usage summary."""
+    db = get_usage_db()
+    return {"data": db.get_summary(since=since, until=until, group_by="model", role_filter="classifier")}
+
+
 @router.get("/roles")
 async def stats_roles(since: Optional[str] = None, until: Optional[str] = None):
     """Request count grouped by routing role."""

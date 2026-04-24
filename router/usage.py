@@ -113,6 +113,7 @@ class UsageDB:
         since: Optional[str] = None,
         until: Optional[str] = None,
         group_by: str = "model",
+        role_filter: Optional[str] = None,
     ) -> list[dict]:
         """Get aggregated usage summary.
 
@@ -139,10 +140,12 @@ class UsageDB:
                     AVG(latency_ms) as avg_latency_ms
                 FROM usage_logs
                 WHERE timestamp >= ? AND timestamp <= ?
+                  AND CASE WHEN ? IS NULL THEN (role IS NULL OR role != 'classifier')
+                           ELSE role = ? END
                 GROUP BY {group_by}, channel
                 ORDER BY request_count DESC
                 """,
-                (since, until),
+                (since, until, role_filter, role_filter),
             ).fetchall()
             return [dict(r) for r in rows]
 
