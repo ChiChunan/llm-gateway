@@ -19,6 +19,20 @@ from dashboard import router as dashboard_router
 
 CST = timezone(timedelta(hours=8))
 
+# 5xx/超时失败计数，用于指数退避（重启后清零）
+_failure_counts: dict[str, int] = {}
+
+def _backoff_seconds(model: str) -> int:
+    """指数退避：60s → 120s → 300s → 3600s 上限。"""
+    n = _failure_counts.get(model, 0)
+    return min(60 * (2 ** n), 3600)
+
+def _record_failure(model: str):
+    _failure_counts[model] = _failure_counts.get(model, 0) + 1
+
+def _clear_failure(model: str):
+    _failure_counts.pop(model, None)
+
 
 def load_config(path: str = "routing.yaml") -> dict:
     with open(path) as f:
@@ -63,6 +77,14 @@ else:
         api_key=first_provider.api_key,
         model=cfg["routing"]["classifier"],
     )
+
+# ARK 不可用时的备用分类器（MiniMax）
+minimax_provider = providers.get("minimax")
+fallback_classifier = Classifier(
+    base_url=minimax_provider.base_url,
+    api_key=minimax_provider.api_key,
+    model="MiniMax-M2.7-highspeed",
+) if minimax_provider else None
 
 
 def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[str, object] | tuple[None, None]:
@@ -176,7 +198,13 @@ async def chat_completions(request: Request):
         target_model, target_provider = requested_model, provider
     else:
         last_msg = classifier.extract_last_user_message(messages)
-        complexity = await classifier.classify(last_msg)
+        # ARK plan 不可用时切换到 MiniMax 分类器
+        ark_available = any(
+            channel_mgr.is_available(m)
+            for m in ["doubao-seed-2-0-lite", "doubao-seed-2-0-pro", "glm-5-1"]
+        )
+        active_classifier = classifier if ark_available else (fallback_classifier or classifier)
+        complexity = await active_classifier.classify(last_msg)
         session_key = _get_session_key(messages)
 
         if complexity == Complexity.COORDINATOR:
@@ -235,13 +263,16 @@ async def chat_completions(request: Request):
             if status_code == 429:
                 channel_mgr.handle_429(_m, err_msg)
             else:
-                channel_mgr.mark_unavailable(_m, until=datetime.now(CST) + timedelta(seconds=60))
+                _record_failure(_m)
+                channel_mgr.mark_unavailable(_m, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(_m)))
 
         try:
-            return await forward_request(
+            resp = await forward_request(
                 body, attempt_model, get_channel_for_model(attempt_model), attempt_provider,
                 on_error=_on_upstream_error,
             )
+            _clear_failure(attempt_model)
+            return resp
         except httpx.HTTPStatusError as e:
             err_msg = ""
             try:
@@ -251,10 +282,12 @@ async def chat_completions(request: Request):
             if e.response.status_code == 429:
                 channel_mgr.handle_429(attempt_model, err_msg)
             else:
-                channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=60))
+                _record_failure(attempt_model)
+                channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(attempt_model)))
             last_error = f"{e.response.status_code}: {err_msg}"
         except (httpx.TimeoutException, httpx.ConnectError) as e:
-            channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=60))
+            _record_failure(attempt_model)
+            channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(attempt_model)))
             last_error = str(e)
 
     earliest = channel_mgr.earliest_recovery()
