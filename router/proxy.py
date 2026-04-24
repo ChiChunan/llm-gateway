@@ -23,6 +23,9 @@ def build_forwarded_request(original: dict, target_model: str) -> dict:
         # MiniMax: no thinking-disable param; ensure budget isn't exhausted before content
         if payload.get("max_tokens", 8192) < 8192:
             payload["max_tokens"] = 8192
+    # ARK 流式响应默认不返回 usage，需显式开启
+    if payload.get("stream") and get_channel_for_model(target_model) == "ark":
+        payload.setdefault("stream_options", {"include_usage": True})
     return payload
 
 
