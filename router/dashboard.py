@@ -225,20 +225,29 @@ async function loadDaily(days = 7) {
   const datasets = models.map(m => ({
     label: m,
     data: allDates.map(d => dateMap[d]?.[m] || 0),
-    backgroundColor: getColor(m),
-    borderRadius: 3,
+    borderColor: getColor(m),
+    backgroundColor: getColor(m) + '99',
+    fill: true,
+    tension: 0.3,
+    pointRadius: 3,
+    pointHoverRadius: 5,
   }));
 
   if (dailyChartInstance) dailyChartInstance.destroy();
   dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
-    type: 'bar',
+    type: 'line',
     data: { labels: allDates, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
       scales: {
-        x: { stacked: true, ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
-        y: { stacked: true, ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } }
+        x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          ticks: { color: '#94a3b8', font: { size: 10 } },
+          grid: { color: '#1e293b' }
+        }
       }
     }
   });
