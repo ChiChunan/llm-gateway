@@ -70,11 +70,10 @@ class Classifier:
                     **self._extra_body,
                 },
             )
-            resp.raise_for_status()
             latency = int((time.monotonic() - start) * 1000)
-            data = resp.json()
-            usage = data.get("usage", {}) or {}
             try:
+                data = resp.json()
+                usage = data.get("usage", {}) or {}
                 get_usage_db().record(
                     model=self._model,
                     channel=get_channel_for_model(self._model),
@@ -86,6 +85,7 @@ class Classifier:
                 )
             except Exception:
                 pass
+            resp.raise_for_status()
             return data["choices"][0]["message"]["content"]
 
     async def classify(self, last_user_message: str) -> Complexity:

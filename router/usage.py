@@ -61,11 +61,6 @@ class UsageDB:
                     latency_ms INTEGER
                 )
             """)
-            # 兼容旧表：若 role 列不存在则添加
-            try:
-                conn.execute("ALTER TABLE usage_logs ADD COLUMN role TEXT DEFAULT 'unknown'")
-            except Exception:
-                pass
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_usage_timestamp
                 ON usage_logs(timestamp)
@@ -74,6 +69,11 @@ class UsageDB:
                 CREATE INDEX IF NOT EXISTS idx_usage_model
                 ON usage_logs(model)
             """)
+        # 兼容旧表：在独立事务中添加 role 列，避免异常污染主事务
+        existing = {row[1] for row in self._get_conn().execute("PRAGMA table_info(usage_logs)").fetchall()}
+        if "role" not in existing:
+            with self._conn() as conn:
+                conn.execute("ALTER TABLE usage_logs ADD COLUMN role TEXT DEFAULT 'unknown'")
 
     def record(
         self,
