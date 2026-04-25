@@ -94,40 +94,43 @@ async def _stream_response(
 
     async def generate():
         nonlocal accumulated_usage
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            async with client.stream(
-                "POST",
-                f"{provider.base_url}/chat/completions",
-                headers=provider.get_headers(),
-                json=payload,
-            ) as resp:
-                if resp.status_code >= 400:
-                    body_bytes = await resp.aread()
-                    if on_error is not None:
-                        await on_error(resp.status_code, body_bytes.decode(errors="replace"))
-                    err = _json.dumps({"error": "upstream error", "status": resp.status_code})
-                    yield f"data: {err}\n\n".encode()
-                    # Record failed request
-                    latency = int((time.monotonic() - start) * 1000)
-                    db.record(target_model, channel, role=role, status_code=resp.status_code, latency_ms=latency)
-                    return
-                async for line in resp.aiter_lines():
-                    usage = _parse_usage_from_chunk(line)
-                    if usage is not None:
-                        accumulated_usage = usage
-                    yield (line + "\n\n").encode("utf-8")
-
-        latency = int((time.monotonic() - start) * 1000)
-        if accumulated_usage:
-            db.record(
-                target_model, channel, role=role,
-                prompt_tokens=accumulated_usage["prompt_tokens"],
-                completion_tokens=accumulated_usage["completion_tokens"],
-                cached_tokens=accumulated_usage["cached_tokens"],
-                status_code=200, latency_ms=latency,
-            )
-        else:
-            db.record(target_model, channel, role=role, status_code=200, latency_ms=latency)
+        final_status = 200
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                async with client.stream(
+                    "POST",
+                    f"{provider.base_url}/chat/completions",
+                    headers=provider.get_headers(),
+                    json=payload,
+                ) as resp:
+                    if resp.status_code >= 400:
+                        final_status = resp.status_code
+                        body_bytes = await resp.aread()
+                        if on_error is not None:
+                            await on_error(resp.status_code, body_bytes.decode(errors="replace"))
+                        err = _json.dumps({"error": "upstream error", "status": resp.status_code})
+                        yield f"data: {err}\n\n".encode()
+                        return
+                    async for line in resp.aiter_lines():
+                        usage = _parse_usage_from_chunk(line)
+                        if usage is not None:
+                            accumulated_usage = usage
+                        yield (line + "\n\n").encode("utf-8")
+        except Exception:
+            final_status = 500
+            raise
+        finally:
+            latency = int((time.monotonic() - start) * 1000)
+            if accumulated_usage:
+                db.record(
+                    target_model, channel, role=role,
+                    prompt_tokens=accumulated_usage["prompt_tokens"],
+                    completion_tokens=accumulated_usage["completion_tokens"],
+                    cached_tokens=accumulated_usage["cached_tokens"],
+                    status_code=final_status, latency_ms=latency,
+                )
+            else:
+                db.record(target_model, channel, role=role, status_code=final_status, latency_ms=latency)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
