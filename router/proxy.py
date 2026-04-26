@@ -10,6 +10,18 @@ from usage import get_usage_db
 
 # connect timeout 10s, read timeout 120s (balance fast-fail with long streaming)
 _TIMEOUT = httpx.Timeout(10.0, read=120.0)
+# 全局连接池：每 host 最多 100 个连接，空闲连接 30s 后回收
+# 重连时复用已有连接，消除新建 TCP+TLS 握手开销
+_LIMITS = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
+_CLIENT: httpx.AsyncClient | None = None
+
+
+def get_client() -> httpx.AsyncClient:
+    """返回全局共享的 httpx 客户端（延迟创建，确保在 async 上下文中调用）。"""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = httpx.AsyncClient(timeout=_TIMEOUT, limits=_LIMITS)
+    return _CLIENT
 
 
 def build_forwarded_request(original: dict, target_model: str) -> dict:
@@ -96,26 +108,26 @@ async def _stream_response(
         nonlocal accumulated_usage
         final_status = 200
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                async with client.stream(
-                    "POST",
-                    f"{provider.base_url}/chat/completions",
-                    headers=provider.get_headers(),
-                    json=payload,
-                ) as resp:
-                    if resp.status_code >= 400:
-                        final_status = resp.status_code
-                        body_bytes = await resp.aread()
-                        if on_error is not None:
-                            await on_error(resp.status_code, body_bytes.decode(errors="replace"))
-                        err = _json.dumps({"error": "upstream error", "status": resp.status_code})
-                        yield f"data: {err}\n\n".encode()
-                        return
-                    async for line in resp.aiter_lines():
-                        usage = _parse_usage_from_chunk(line)
-                        if usage is not None:
-                            accumulated_usage = usage
-                        yield (line + "\n\n").encode("utf-8")
+            client = get_client()
+            async with client.stream(
+                "POST",
+                f"{provider.base_url}/chat/completions",
+                headers=provider.get_headers(),
+                json=payload,
+            ) as resp:
+                if resp.status_code >= 400:
+                    final_status = resp.status_code
+                    body_bytes = await resp.aread()
+                    if on_error is not None:
+                        await on_error(resp.status_code, body_bytes.decode(errors="replace"))
+                    err = _json.dumps({"error": "upstream error", "status": resp.status_code})
+                    yield f"data: {err}\n\n".encode()
+                    return
+                async for line in resp.aiter_lines():
+                    usage = _parse_usage_from_chunk(line)
+                    if usage is not None:
+                        accumulated_usage = usage
+                    yield (line + "\n\n").encode("utf-8")
         except Exception:
             final_status = 500
             raise
@@ -148,12 +160,12 @@ async def _json_response(
     Also extracts usage from the response and records it.
     """
     db = get_usage_db()
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(
-            f"{provider.base_url}/chat/completions",
-            headers=provider.get_headers(),
-            json=payload,
-        )
+    client = get_client()
+    resp = await client.post(
+        f"{provider.base_url}/chat/completions",
+        headers=provider.get_headers(),
+        json=payload,
+    )
     latency = int((time.monotonic() - start) * 1000)
 
     try:

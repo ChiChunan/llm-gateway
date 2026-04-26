@@ -134,7 +134,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 预热连接池（提前建立到各 provider 的连接）
+    from proxy import get_client
+    get_client()
     yield
+    # 关闭时关闭全局 httpx client，释放连接池
+    from proxy import _CLIENT
+    if _CLIENT is not None:
+        await _CLIENT.aclose()
+        # 重置，以便下次 startup 可重新初始化
+        import proxy as _p
+        _p._CLIENT = None
 
 
 app = FastAPI(lifespan=lifespan)
