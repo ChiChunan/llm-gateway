@@ -47,9 +47,30 @@ class ClassifyResult:
     latency_ms: int
 
 
+_COORDINATOR_KEYWORDS = [
+    # 模型名
+    "kimi",
+    # 规划/拆解
+    "规划", "拆解", "方案", "计划", "设计", "架构",
+    # 分析/检查/验证
+    "分析", "检查", "验证", "review", "审查", "审计", "评估",
+    # 协调/多步骤
+    "协调", "调度", "多步", "流程", "pipeline",
+    # 需求/目标
+    "需求", "目标", "边界", "澄清",
+    # 汇总/总结大型任务
+    "汇总", "整合", "梳理",
+]
+
+
 def keyword_classify(text: str) -> ClassifyResult:
-    """ark 不可用时的关键字降级分类：含 kimi（大小写不限）→ coordinator，否则 → executor。"""
-    complexity = Complexity.COORDINATOR if "kimi" in text.lower() else Complexity.EXECUTOR
+    """ark 不可用时的关键字降级分类。"""
+    lower = text.lower()
+    complexity = (
+        Complexity.COORDINATOR
+        if any(kw in lower for kw in _COORDINATOR_KEYWORDS)
+        else Complexity.EXECUTOR
+    )
     return ClassifyResult(complexity=complexity, model="keyword", prompt_tokens=0, completion_tokens=0, latency_ms=0)
 
 
