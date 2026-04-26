@@ -75,7 +75,7 @@ def keyword_classify(text: str) -> ClassifyResult:
 
 
 class Classifier:
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 5.0, extra_body: dict | None = None):
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 10.0, extra_body: dict | None = None):
         self._base_url = base_url
         self._api_key = api_key
         self._model = model
