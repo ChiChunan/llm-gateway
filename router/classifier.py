@@ -47,6 +47,12 @@ class ClassifyResult:
     latency_ms: int
 
 
+def keyword_classify(text: str) -> ClassifyResult:
+    """ark 不可用时的关键字降级分类：含 kimi（大小写不限）→ coordinator，否则 → executor。"""
+    complexity = Complexity.COORDINATOR if "kimi" in text.lower() else Complexity.EXECUTOR
+    return ClassifyResult(complexity=complexity, model="keyword", prompt_tokens=0, completion_tokens=0, latency_ms=0)
+
+
 class Classifier:
     def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 5.0, extra_body: dict | None = None):
         self._base_url = base_url

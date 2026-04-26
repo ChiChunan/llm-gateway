@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from channel import ChannelManager
-from classifier import Classifier, ClassifyResult, Complexity
+from classifier import Classifier, ClassifyResult, Complexity, keyword_classify
 from proxy import forward_request
 from providers import init_providers, get_channel_for_model, get_provider_for_model
 from usage import init_usage_db
@@ -82,14 +82,7 @@ else:
         model=cfg["routing"]["classifier"],
     )
 
-# ARK 不可用时的备用分类器（MiniMax）
-minimax_provider = providers.get("minimax")
-fallback_classifier = Classifier(
-    base_url=minimax_provider.base_url,
-    api_key=minimax_provider.api_key,
-    model="MiniMax-M2.7-highspeed",
-    extra_body={"max_tokens": 200},  # MiniMax thinking 约消耗 100 tokens，需留余量给 content 输出
-) if minimax_provider else None
+# ARK 不可用时降级为关键字匹配，不再使用 MiniMax 分类器
 
 
 def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[str, object] | tuple[None, None]:
@@ -205,14 +198,16 @@ async def chat_completions(request: Request):
         last_msg = classifier.extract_last_user_message(messages)
         ark_available = any(
             channel_mgr.is_available(m)
-            for m in ["doubao-seed-2-0-lite", "doubao-seed-2-0-pro", "glm-5-1"]
+            for m in ["ark-code-latest", "doubao-seed-2-0-pro", "glm-5-1"]
         )
-        active_classifier = classifier if ark_available else (fallback_classifier or classifier)
-        classify_result = await active_classifier.classify(last_msg, on_429=channel_mgr.handle_429)
-        # 主分类器失败时立即用 fallback 重分类
-        if classify_result is None and active_classifier is classifier and fallback_classifier:
-            classify_result = await fallback_classifier.classify(last_msg, on_429=channel_mgr.handle_429)
-        complexity = classify_result.complexity if classify_result else Complexity.EXECUTOR
+        if ark_available:
+            classify_result = await classifier.classify(last_msg, on_429=channel_mgr.handle_429)
+        else:
+            classify_result = None
+        # ark 不可用或分类失败，降级为关键字匹配
+        if classify_result is None:
+            classify_result = keyword_classify(last_msg)
+        complexity = classify_result.complexity
         session_key = _get_session_key(messages)
 
         if complexity == Complexity.COORDINATOR:
