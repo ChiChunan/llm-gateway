@@ -213,9 +213,12 @@ async def chat_completions(request: Request):
         if ark_available:
             classify_result = await classifier.classify(last_msg, on_429=channel_mgr.handle_429)
         else:
+            logging.warning(f"classifier skipped: ark unavailable, fallback to keyword")
             classify_result = None
         # ark 不可用或分类失败，降级为关键字匹配
         if classify_result is None:
+            if ark_available:
+                logging.warning("classifier returned None (failed), fallback to keyword")
             classify_result = keyword_classify(last_msg)
         complexity = classify_result.complexity
         session_key = _get_session_key(messages)
