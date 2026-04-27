@@ -19,6 +19,7 @@ class ProviderConfig:
 
 # Model name -> channel identifier
 MODEL_TO_CHANNEL: dict[str, str] = {
+    "ark-code-latest": "ark",
     "doubao-seed-2-0-lite": "ark",
     "doubao-seed-2-0-pro": "ark",
     "glm-5-1": "ark",

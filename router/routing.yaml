@@ -1,5 +1,5 @@
 routing:
-  classifier: "ark-code-latest"
+  classifier: "doubao-seed-2-0-lite"
 
   # coordinator：规划/拆解/分工 + 检查/review/验证
   coordinator_candidates:
@@ -30,7 +30,7 @@ routing:
 plans:
   ark:
     channels:
-      - "ark-code-latest"
+      - "doubao-seed-2-0-lite"
       - "doubao-seed-2-0-pro"
       - "glm-5-1"
   kimi:

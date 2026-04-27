@@ -208,7 +208,7 @@ async def chat_completions(request: Request):
         last_msg = classifier.extract_last_user_message(messages)
         ark_available = any(
             channel_mgr.is_available(m)
-            for m in ["ark-code-latest", "doubao-seed-2-0-pro", "glm-5-1"]
+            for m in ["doubao-seed-2-0-lite", "doubao-seed-2-0-pro", "glm-5-1"]
         )
         if ark_available:
             classify_result = await classifier.classify(last_msg, on_429=channel_mgr.handle_429)
