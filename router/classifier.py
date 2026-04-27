@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -104,6 +105,7 @@ class Classifier:
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 20,
                     "temperature": 0,
+                    "reasoning_effort": "minimal",
                     **self._extra_body,
                 },
             )
@@ -132,5 +134,6 @@ class Classifier:
                 completion_tokens=usage.get("completion_tokens", 0) or 0,
                 latency_ms=latency,
             )
-        except Exception:
+        except Exception as e:
+            logging.warning(f"classifier failed: {type(e).__name__}: {e}")
             return None
