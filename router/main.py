@@ -227,7 +227,7 @@ async def chat_completions(request: Request):
         target_model, target_provider = requested_model, provider
     else:
         last_msg = classifier.extract_last_user_message(messages)
-        ark_available = any(
+        ark_available = channel_mgr.is_provider_available("ark") and any(
             channel_mgr.is_available(m)
             for m in ["doubao-seed-2-0-lite", "doubao-seed-2-0-pro", "glm-5-1"]
         )
