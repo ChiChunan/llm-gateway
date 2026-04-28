@@ -243,7 +243,6 @@ async def chat_completions(request: Request):
             classify_result = keyword_classify(last_msg)
         complexity = classify_result.complexity
         session_key = _get_session_key(messages)
-        logging.warning(f"session_key={str(session_key)[:80]!r} complexity={complexity.value}")
 
         if complexity == Complexity.COORDINATOR:
             target_model, target_provider = _pick_model(routing.get("coordinator_candidates", []), session_key)
