@@ -400,14 +400,8 @@ async function loadRouterChart() {
   });
 }
 
-// 从 localStorage 获取 API_KEY，没有则通过 prompt 询问
 function getApiKey() {
-  let key = localStorage.getItem('llm_gateway_api_key');
-  if (!key) {
-    key = prompt('请输入 API Key（用于 Provider 配置操作）:') || '';
-    if (key) localStorage.setItem('llm_gateway_api_key', key);
-  }
-  return key;
+  return localStorage.getItem('llm_gateway_api_key') || 'V.A.L.O.R.';
 }
 
 // 标签页切换
