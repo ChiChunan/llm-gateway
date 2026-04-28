@@ -286,7 +286,8 @@ async def chat_completions(request: Request):
                 continue
             seen.add(m)
             p = get_provider_for_model(m, providers)
-            if p and channel_mgr.is_available(m):
+            provider_name = get_channel_for_model(m)
+            if p and channel_mgr.is_provider_available(provider_name) and channel_mgr.is_available(m):
                 retry_candidates.append((m, p))
 
     last_error = None
