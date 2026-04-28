@@ -119,14 +119,21 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
 
 
 def _get_session_key(messages: list[dict]) -> str | None:
-    """取第一条 user 消息的内容前 200 字符作为 session 标识。"""
+    """取第一条 user 消息的首句内容作为 session 标识。
+    兼容 Hermes 将历史拼入 user 消息的格式（User: xxx\nAssistant: xxx）。
+    """
     for msg in messages:
         if msg.get("role") != "user":
             continue
         content = msg.get("content", "")
         if isinstance(content, list):
             content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-        return str(content)[:200] or None
+        content = str(content)
+        # Hermes 格式：以 "User: " 开头时取第一个 User 块内容
+        if content.startswith("User:"):
+            first = content[5:].split("\nAssistant:")[0].strip()
+            return first[:200] or None
+        return content[:200] or None
     return None
 
 
