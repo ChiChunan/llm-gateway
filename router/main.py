@@ -119,8 +119,8 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
 
 
 def _get_session_key(messages: list[dict]) -> str | None:
-    """取第一条 user 消息的内容前 200 字符作为 session 标识。"""
-    for msg in messages:
+    """取最后一条 user 消息的内容前 200 字符作为 session 标识。"""
+    for msg in reversed(messages):
         if msg.get("role") != "user":
             continue
         content = msg.get("content", "")
