@@ -72,6 +72,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   .loading { text-align: center; padding: 40px; color: var(--muted); }
+
+  /* 标签页导航 */
+  .tab-nav { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+  .tab-btn { background: none; border: none; color: var(--muted); padding: 10px 18px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color 0.15s; }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
 </style>
 </head>
 <body>
@@ -80,6 +88,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button class="refresh" onclick="loadAll()">↻ 刷新</button>
   </div>
   <div class="container">
+    <!-- 标签页导航 -->
+    <div class="tab-nav">
+      <button class="tab-btn active" onclick="switchTab('overview')">概览</button>
+      <button class="tab-btn" onclick="switchTab('config')">配置</button>
+    </div>
+
+    <!-- 概览标签页 -->
+    <div id="tab-overview" class="tab-pane active">
+
     <!-- Stats cards -->
     <div class="stats-row" id="statsRow">
       <div class="stat-card"><div class="label">总请求数</div><div class="value blue" id="totalReqs">-</div></div>
@@ -140,6 +157,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
       <div id="logsList"></div>
     </div>
+
+    </div><!-- /tab-overview -->
+
+    <!-- 配置标签页 -->
+    <div id="tab-config" class="tab-pane">
+      <div class="table-card">
+        <h3>Provider 开关</h3>
+        <table>
+          <thead><tr>
+            <th>Provider</th><th>当前状态</th><th>活跃请求</th><th>操作</th>
+          </tr></thead>
+          <tbody id="providers-table-body"></tbody>
+        </table>
+      </div>
+    </div><!-- /tab-config -->
+
   </div>
 
 <script>
@@ -365,6 +398,59 @@ async function loadRouterChart() {
       plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } }
     }
   });
+}
+
+// 从 localStorage 获取 API_KEY，没有则通过 prompt 询问
+function getApiKey() {
+  let key = localStorage.getItem('llm_gateway_api_key');
+  if (!key) {
+    key = prompt('请输入 API Key（用于 Provider 配置操作）:') || '';
+    if (key) localStorage.setItem('llm_gateway_api_key', key);
+  }
+  return key;
+}
+
+// 标签页切换
+function switchTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
+  if (name === 'config') loadProviders();
+}
+
+// 加载 Provider 列表
+async function loadProviders() {
+  const r = await fetch('/api/config/providers');
+  const j = await r.json();
+  const tbody = document.getElementById('providers-table-body');
+  tbody.innerHTML = '';
+  for (const p of j.data) {
+    const stateLabel = {'enabled':'运行中','draining':'关闭中','disabled':'已关闭'}[p.state] || p.state;
+    const stateColor = {'enabled':'var(--green)','draining':'var(--amber)','disabled':'var(--red)'}[p.state];
+    const btnLabel = p.enabled ? '关闭' : '开启';
+    const btnColor = p.enabled ? 'var(--red)' : 'var(--green)';
+    tbody.innerHTML += `<tr>
+      <td class="mono">${p.name}</td>
+      <td style="color:${stateColor}">${stateLabel}</td>
+      <td class="mono">${p.active_requests}</td>
+      <td><button onclick="toggleProvider('${p.name}',${!p.enabled})"
+          style="background:${btnColor};color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer">
+          ${btnLabel}</button></td>
+    </tr>`;
+  }
+}
+
+// 切换 Provider 开关
+async function toggleProvider(name, enable) {
+  const apiKey = getApiKey();
+  const r = await fetch(`/api/config/providers/${name}`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${apiKey}`},
+    body: JSON.stringify({enabled: enable})
+  });
+  if (!r.ok) { alert('操作失败'); return; }
+  await loadProviders();
 }
 
 async function loadAll() {

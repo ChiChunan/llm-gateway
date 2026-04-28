@@ -25,6 +25,8 @@ MODEL_TO_CHANNEL: dict[str, str] = {
     "glm-5-1": "ark",
     "kimi-for-coding": "kimi",
     "MiniMax-M2.7-highspeed": "minimax",
+    "deepseek-v4-pro": "deepseek",
+    "deepseek-v4-flash": "deepseek",
 }
 
 # Channel -> default model (for /v1/models listing)
@@ -32,6 +34,7 @@ CHANNEL_TO_DEFAULT_MODEL: dict[str, str] = {
     "ark": "doubao-seed-2-0-pro",
     "kimi": "kimi-for-coding",
     "minimax": "MiniMax-M2.7-highspeed",
+    "deepseek": "deepseek-v4-pro",
 }
 
 
@@ -68,6 +71,15 @@ def init_providers() -> dict[str, ProviderConfig]:
         providers["minimax"] = ProviderConfig(
             base_url=minimax_base,
             api_key=minimax_key,
+        )
+
+    # DeepSeek
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    deepseek_base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+    if deepseek_key:
+        providers["deepseek"] = ProviderConfig(
+            base_url=deepseek_base,
+            api_key=deepseek_key,
         )
 
     return providers

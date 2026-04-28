@@ -10,12 +10,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+import provider_state as _pstate
 from channel import ChannelManager
 from classifier import Classifier, ClassifyResult, Complexity, keyword_classify
 from proxy import forward_request
 from providers import init_providers, get_channel_for_model, get_provider_for_model
 from usage import init_usage_db
-from api_stats import router as stats_router
+from api_stats import router as stats_router, config_router
 from dashboard import router as dashboard_router
 
 CST = timezone(timedelta(hours=8))
@@ -65,6 +66,11 @@ channel_mgr = ChannelManager(
     plans=cfg.get("plans", {}),
 )
 
+# 从配置加载 provider 初始开关状态
+for provider, enabled in cfg.get("provider_switches", {}).items():
+    channel_mgr.set_provider_state(provider, bool(enabled))
+_pstate.set_channel_mgr(channel_mgr, "routing.yaml")
+
 usage_db = init_usage_db()
 
 ark_provider = providers.get("ark")
@@ -99,11 +105,16 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
     else:
         ordered = candidates
     for model in ordered:
+        provider = get_provider_for_model(model, providers)
+        if provider is None:
+            continue
+        # 检查 provider 级别开关
+        provider_name = get_channel_for_model(model)
+        if not channel_mgr.is_provider_available(provider_name):
+            continue
         if not channel_mgr.is_available(model):
             continue
-        provider = get_provider_for_model(model, providers)
-        if provider is not None:
-            return model, provider
+        return model, provider
     return None, None
 
 
@@ -151,6 +162,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(AuthMiddleware)
 
 app.include_router(stats_router)
+app.include_router(config_router)
 app.include_router(dashboard_router)
 
 
@@ -197,6 +209,12 @@ async def chat_completions(request: Request):
             return JSONResponse(
                 status_code=400,
                 content={"error": f"unknown model: {requested_model}"},
+            )
+        provider_name = get_channel_for_model(requested_model)
+        if not channel_mgr.is_provider_available(provider_name):
+            return JSONResponse(
+                status_code=503,
+                content={"error": f"provider for {requested_model} is disabled"},
             )
         if not channel_mgr.is_available(requested_model):
             return JSONResponse(
@@ -285,12 +303,18 @@ async def chat_completions(request: Request):
                 channel_mgr.mark_unavailable(_m, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(_m)))
 
         role_str = "direct" if requested_model != "auto" else complexity.value
+        # 获取 provider 名称（即 channel 名称，如 "ark"/"kimi"）
+        attempt_provider_name = get_channel_for_model(attempt_model)
         try:
-            resp = await forward_request(
-                body, attempt_model, get_channel_for_model(attempt_model), attempt_provider,
-                on_error=_on_upstream_error,
-                role=role_str,
-            )
+            channel_mgr.acquire_provider_request(attempt_provider_name)
+            try:
+                resp = await forward_request(
+                    body, attempt_model, get_channel_for_model(attempt_model), attempt_provider,
+                    on_error=_on_upstream_error,
+                    role=role_str,
+                )
+            finally:
+                channel_mgr.release_provider_request(attempt_provider_name)
             _clear_failure(attempt_model)
             # 请求成功后才记录分类器用量，确保统计的是真正完成路由的次数
             if requested_model == "auto" and classify_result:

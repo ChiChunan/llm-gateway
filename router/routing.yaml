@@ -3,15 +3,18 @@ routing:
 
   # coordinator：规划/拆解/分工 + 检查/review/验证
   coordinator_candidates:
+    - "deepseek-v4-pro"
     - "glm-5-1"
     - "kimi-for-coding"
 
   # writer：文字/文档/总结/解释/翻译
   writer_candidates:
+    - "deepseek-v4-flash"
     - "doubao-seed-2-0-pro"
 
   # executor：代码/工具调用/具体问答/其他
   executor_candidates:
+    - "deepseek-v4-flash"
     - "MiniMax-M2.7-highspeed"
 
   coordinator_fallback:
@@ -26,6 +29,13 @@ routing:
     - "MiniMax-M2.7-highspeed"
     - "doubao-seed-2-0-pro"
 
+# provider 级别开关（true=启用，false=禁用）
+provider_switches:
+  ark: true
+  kimi: true
+  minimax: true
+  deepseek: true
+
 # plan 级别联动：任意渠道触发 429，同 plan 下所有渠道一起标记
 plans:
   ark:
@@ -39,4 +49,8 @@ plans:
   minimax:
     channels:
       - "MiniMax-M2.7-highspeed"
+  deepseek:
+    channels:
+      - "deepseek-v4-pro"
+      - "deepseek-v4-flash"
 

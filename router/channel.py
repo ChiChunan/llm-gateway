@@ -1,8 +1,15 @@
 import re
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from typing import Optional
 
 CST = timezone(timedelta(hours=8))
+
+
+class ProviderState(Enum):
+    ENABLED = "enabled"
+    DRAINING = "draining"
+    DISABLED = "disabled"
 
 
 class ChannelManager:
@@ -13,6 +20,10 @@ class ChannelManager:
         self._plans: dict[str, list[str]] = {}
         # 渠道 -> 所属 plan 名称（无 plan 时不存在该 key）
         self._channel_to_plan: dict[str, str] = {}
+        # provider 级别开关状态
+        self._provider_states: dict[str, ProviderState] = {}
+        # 各 provider 活跃请求计数
+        self._active_requests: dict[str, int] = {}
         if plans:
             for plan_name, plan_cfg in plans.items():
                 members = plan_cfg.get("channels", [])
@@ -42,6 +53,41 @@ class ChannelManager:
     def available_channels(self) -> list[str]:
         """返回当前所有可用渠道列表"""
         return [c for c in self._status if self.is_available(c)]
+
+    def set_provider_state(self, provider: str, enabled: bool):
+        """设置 provider 开关：关闭时有活跃请求则进入 draining，否则直接 disabled。"""
+        if enabled:
+            self._provider_states[provider] = ProviderState.ENABLED
+        else:
+            if self._active_requests.get(provider, 0) > 0:
+                self._provider_states[provider] = ProviderState.DRAINING
+            else:
+                self._provider_states[provider] = ProviderState.DISABLED
+
+    def is_provider_available(self, provider: str) -> bool:
+        """新请求路由时检查 provider 是否接受请求（只有 ENABLED 状态才接受）。"""
+        return self._provider_states.get(provider, ProviderState.ENABLED) == ProviderState.ENABLED
+
+    def get_provider_state(self, provider: str) -> ProviderState:
+        """获取 provider 当前状态。"""
+        return self._provider_states.get(provider, ProviderState.ENABLED)
+
+    def get_active_requests(self, provider: str) -> int:
+        """获取 provider 当前活跃请求数。"""
+        return self._active_requests.get(provider, 0)
+
+    def acquire_provider_request(self, provider: str):
+        """请求开始时增加 provider 活跃计数。"""
+        self._active_requests[provider] = self._active_requests.get(provider, 0) + 1
+
+    def release_provider_request(self, provider: str):
+        """请求完成时减少活跃计数，draining 且归零时自动转为 disabled。"""
+        count = self._active_requests.get(provider, 0)
+        if count > 0:
+            self._active_requests[provider] = count - 1
+            count -= 1
+        if count == 0 and self._provider_states.get(provider) == ProviderState.DRAINING:
+            self._provider_states[provider] = ProviderState.DISABLED
 
     def earliest_recovery(self) -> Optional[datetime]:
         """返回最早恢复时间，全部可用时返回 None"""
