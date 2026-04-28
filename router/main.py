@@ -119,13 +119,15 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
 
 
 def _get_session_key(messages: list[dict]) -> str | None:
-    """取 messages[0] 的内容前 200 字符作为 session 标识。"""
-    if not messages:
-        return None
-    content = messages[0].get("content", "")
-    if isinstance(content, list):
-        content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-    return str(content)[:200] or None
+    """取第一条 user 消息的内容前 200 字符作为 session 标识。"""
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+        return str(content)[:200] or None
+    return None
 
 
 GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "V.A.L.O.R.")
