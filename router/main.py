@@ -121,15 +121,12 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
     if not available:
         return None, None
 
-    # 有 session_key：用一致性哈希打乱，同 session 固定，不同 session 均匀随机
+    # 有 session_key：hash 取余选模型，同 session 固定，不同 session 均匀随机
     if session_key:
         import hashlib
-        import random
-        seed = int(hashlib.sha256(session_key.encode()).hexdigest(), 16) % (10 ** 9)
-        rng = random.Random(seed)
-        ordered = available.copy()
-        rng.shuffle(ordered)
-        logging.info(f"pick_model session_key={session_key!r} seed={seed} available={available} ordered={ordered}")
+        idx = int(hashlib.sha256(session_key.encode()).hexdigest(), 16) % len(available)
+        ordered = available[idx:] + available[:idx]
+        logging.info(f"pick_model session_key={session_key!r} idx={idx} available={available} ordered={ordered}")
     else:
         ordered = available
         logging.info(f"pick_model no_session_key available={available} ordered={ordered}")
