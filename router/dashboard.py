@@ -57,6 +57,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .badge.ark { background: #1e3a5f; color: #60a5fa; }
   .badge.kimi { background: #3b1f4a; color: #c084fc; }
   .badge.minimax { background: #1a3d2e; color: #4ade80; }
+  .badge.deepseek { background: #1a2e3d; color: #38bdf8; }
+  .badge.xiaomi { background: #3d1a1a; color: #f87171; }
 
   /* Recent logs */
   .logs-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
