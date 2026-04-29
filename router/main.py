@@ -301,6 +301,7 @@ async def chat_completions(request: Request):
                     logging.warning("classifier returned None (failed), fallback to keyword")
                 classify_result = keyword_classify(last_msg)
             complexity = classify_result.complexity
+            logging.warning(f"classify complexity={complexity.value} model={classify_result.model} msg={last_msg[:50]!r}")
 
             if complexity == Complexity.COORDINATOR:
                 target_model, target_provider = _pick_model(routing.get("coordinator_candidates", []), session_key)
