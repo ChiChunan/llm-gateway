@@ -132,6 +132,7 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
         logging.info(f"pick_model session_key={session_key!r} seed={seed} available={available} ordered={ordered}")
     else:
         ordered = available
+        logging.info(f"pick_model no_session_key available={available} ordered={ordered}")
 
     # 按打乱后顺序返回第一个
     for model in ordered:
