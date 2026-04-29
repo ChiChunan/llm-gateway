@@ -1,15 +1,14 @@
 routing:
   classifier: doubao-seed-2-0-lite
   coordinator_candidates:
-  - deepseek-v4-pro
-  - glm-5-1
-  - kimi-for-coding
   - mimo-v2.5-pro
+  - kimi-for-coding
+  - glm-5-1
+  - deepseek-v4-pro
   writer_candidates:
   - deepseek-v4-flash
   - doubao-seed-2-0-pro
   executor_candidates:
-  - deepseek-v4-flash
   - MiniMax-M2.7-highspeed
   - mimo-v2.5
   coordinator_fallback:

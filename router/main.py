@@ -93,15 +93,16 @@ else:
 # ARK 不可用时降级为关键字匹配，不再使用 MiniMax 分类器
 
 
-def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[str, object] | tuple[None, None]:
-    """遍历候选列表，返回第一个可用且有 provider 的 (model, provider)。
+def _pick_model(candidates: list[str], session_key: str | None = None) -> list[tuple[str, object]]:
+    """返回按 session_key 打乱后的可用候选列表 [(model, provider), ...]。
 
     - 会预先过滤掉不可用、被禁用、或无 provider 的模型
-    - 有 session_key 时：用一致性哈希打乱过滤后的列表，同 session 固定，不同 session 随机
-    - 无 session_key 时：按过滤后原始顺序遍历
+    - 有 session_key 时：用 seeded shuffle 打乱列表，同 session 固定顺序，不同 session 均匀随机
+    - 无 session_key 时：按过滤后原始顺序
+    - 返回完整有序列表，调用方取 [0] 做首选，后续元素做降级重试
     """
     if not candidates:
-        return None, None
+        return []
 
     # 预过滤：只保留真正可用的模型
     available = []
@@ -119,24 +120,27 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
         available.append(model)
 
     if not available:
-        return None, None
+        return []
 
-    # 有 session_key：hash 取余选模型，同 session 固定，不同 session 均匀随机
+    # 有 session_key：用 seeded shuffle 打乱列表，同 session 固定顺序，不同 session 均匀随机
     if session_key:
         import hashlib
-        idx = int(hashlib.sha256(session_key.encode()).hexdigest(), 16) % len(available)
-        ordered = available[idx:] + available[:idx]
-        logging.warning(f"pick_model session_key={session_key!r} idx={idx} available={available} ordered={ordered}")
+        import random
+        seed = int(hashlib.sha256(session_key.encode()).hexdigest(), 16)
+        ordered = available[:]
+        random.Random(seed).shuffle(ordered)
+        logging.warning(f"pick_model session_key={session_key!r} available={available} ordered={ordered}")
     else:
         ordered = available
         logging.warning(f"pick_model no_session_key available={available} ordered={ordered}")
 
-    # 按打乱后顺序返回第一个
+    # 返回 (model, provider) 有序列表
+    result = []
     for model in ordered:
         provider = get_provider_for_model(model, providers)
         if provider is not None:
-            return model, provider
-    return None, None
+            result.append((model, provider))
+    return result
 
 
 def _has_image(messages: list[dict]) -> bool:
@@ -162,6 +166,7 @@ def _get_session_key(messages: list[dict]) -> str | None:
         content = str(content)
         if content.startswith("User:"):
             content = content[5:].split("\nAssistant:")[0].strip()
+        # 取第一个 user 消息（稳定的 session 标识），不再随轮次改变
         return content[:200] or None
     return None
 
@@ -263,14 +268,14 @@ async def chat_completions(request: Request):
                 status_code=503,
                 content={"error": f"model {requested_model} is rate-limited"},
             )
-        target_model, target_provider = requested_model, provider
+        retry_candidates = [(requested_model, provider)]
     else:
         session_key = _get_session_key(messages)
         complexity = None
         classify_result = None
         # 含图片时跳过分类器，直接路由到多模态候选列表
         if _has_image(messages):
-            target_model, target_provider = _pick_model(routing.get("multimodal_candidates", []), session_key)
+            retry_candidates = _pick_model(routing.get("multimodal_candidates", []), session_key)
         else:
             last_msg = classifier.extract_last_user_message(messages)
             classifier_model = cfg["routing"]["classifier"]
@@ -292,19 +297,19 @@ async def chat_completions(request: Request):
             logging.warning(f"classify complexity={complexity.value} model={classify_result.model} msg={last_msg[:50]!r}")
 
             if complexity == Complexity.COORDINATOR:
-                target_model, target_provider = _pick_model(routing.get("coordinator_candidates", []), session_key)
-                if target_model is None:
-                    target_model, target_provider = _pick_model(routing.get("coordinator_fallback", []), session_key)
+                retry_candidates = _pick_model(routing.get("coordinator_candidates", []), session_key)
+                if not retry_candidates:
+                    retry_candidates = _pick_model(routing.get("coordinator_fallback", []), session_key)
             elif complexity == Complexity.WRITER:
-                target_model, target_provider = _pick_model(routing.get("writer_candidates", []), session_key)
-                if target_model is None:
-                    target_model, target_provider = _pick_model(routing.get("writer_fallback", []), session_key)
+                retry_candidates = _pick_model(routing.get("writer_candidates", []), session_key)
+                if not retry_candidates:
+                    retry_candidates = _pick_model(routing.get("writer_fallback", []), session_key)
             else:  # EXECUTOR
-                target_model, target_provider = _pick_model(routing.get("executor_candidates", []), session_key)
-                if target_model is None:
-                    target_model, target_provider = _pick_model(routing.get("executor_fallback", []), session_key)
+                retry_candidates = _pick_model(routing.get("executor_candidates", []), session_key)
+                if not retry_candidates:
+                    retry_candidates = _pick_model(routing.get("executor_fallback", []), session_key)
 
-        if target_model is None:
+        if not retry_candidates:
             earliest = channel_mgr.earliest_recovery()
             return JSONResponse(
                 status_code=503,
@@ -313,32 +318,6 @@ async def chat_completions(request: Request):
                     "earliest_recovery": earliest.isoformat() if earliest else None,
                 },
             )
-
-
-    # 构建完整候选列表用于降级重试
-    if requested_model != "auto":
-        retry_candidates = [(target_model, target_provider)]
-    else:
-        if complexity is None:
-            # 多模态路径（图片请求），只在 multimodal_candidates 内重试
-            all_candidates = routing.get("multimodal_candidates", [])
-        elif complexity == Complexity.COORDINATOR:
-            all_candidates = routing.get("coordinator_candidates", []) + routing.get("coordinator_fallback", [])
-        elif complexity == Complexity.WRITER:
-            all_candidates = routing.get("writer_candidates", []) + routing.get("writer_fallback", [])
-        else:
-            all_candidates = routing.get("executor_candidates", []) + routing.get("executor_fallback", [])
-        # 去重保序，只保留当前可用的
-        seen = set()
-        retry_candidates = []
-        for m in all_candidates:
-            if m in seen:
-                continue
-            seen.add(m)
-            p = get_provider_for_model(m, providers)
-            provider_name = get_channel_for_model(m)
-            if p and channel_mgr.is_provider_available(provider_name) and channel_mgr.is_model_enabled(m) and channel_mgr.is_available(m):
-                retry_candidates.append((m, p))
 
     last_error = None
     for i, (attempt_model, attempt_provider) in enumerate(retry_candidates):
