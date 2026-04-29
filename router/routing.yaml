@@ -6,6 +6,7 @@ routing:
     - "deepseek-v4-pro"
     - "glm-5-1"
     - "kimi-for-coding"
+    - "mimo-v2.5-pro"
 
   # writer：文字/文档/总结/解释/翻译
   writer_candidates:
@@ -16,6 +17,7 @@ routing:
   executor_candidates:
     - "deepseek-v4-flash"
     - "MiniMax-M2.7-highspeed"
+    - "mimo-v2.5"
 
   coordinator_fallback:
     - "MiniMax-M2.7-highspeed"
@@ -35,6 +37,7 @@ provider_switches:
   kimi: true
   minimax: true
   deepseek: true
+  xiaomi: true
 
 # model 级别开关（true=启用，false=禁用）
 model_switches:
@@ -45,6 +48,8 @@ model_switches:
   MiniMax-M2.7-highspeed: true
   deepseek-v4-pro: true
   deepseek-v4-flash: true
+  mimo-v2.5-pro: true
+  mimo-v2.5: true
 
 # plan 级别联动：任意渠道触发 429，同 plan 下所有渠道一起标记
 plans:
@@ -63,4 +68,8 @@ plans:
     channels:
       - "deepseek-v4-pro"
       - "deepseek-v4-flash"
+  xiaomi:
+    channels:
+      - "mimo-v2.5-pro"
+      - "mimo-v2.5"
 

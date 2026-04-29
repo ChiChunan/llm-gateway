@@ -27,6 +27,8 @@ MODEL_TO_CHANNEL: dict[str, str] = {
     "MiniMax-M2.7-highspeed": "minimax",
     "deepseek-v4-pro": "deepseek",
     "deepseek-v4-flash": "deepseek",
+    "mimo-v2.5-pro": "xiaomi",
+    "mimo-v2.5": "xiaomi",
 }
 
 # Channel -> default model (for /v1/models listing)
@@ -35,6 +37,7 @@ CHANNEL_TO_DEFAULT_MODEL: dict[str, str] = {
     "kimi": "kimi-for-coding",
     "minimax": "MiniMax-M2.7-highspeed",
     "deepseek": "deepseek-v4-pro",
+    "xiaomi": "mimo-v2.5-pro",
 }
 
 
@@ -80,6 +83,15 @@ def init_providers() -> dict[str, ProviderConfig]:
         providers["deepseek"] = ProviderConfig(
             base_url=deepseek_base,
             api_key=deepseek_key,
+        )
+
+    # Xiaomi Mimo
+    mimo_key = os.environ.get("MIMO_API_KEY", "")
+    mimo_base = os.environ.get("MIMO_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")
+    if mimo_key:
+        providers["xiaomi"] = ProviderConfig(
+            base_url=mimo_base,
+            api_key=mimo_key,
         )
 
     return providers
