@@ -36,8 +36,7 @@ def build_forwarded_request(original: dict, target_model: str) -> dict:
         payload.pop("thinking", None)
         payload.pop("reasoning_effort", None)
     elif get_channel_for_model(target_model) == "xiaomi":
-        # mimo 不支持 thinking/reasoning_effort 参数
-        payload.pop("thinking", None)
+        payload.setdefault("thinking", {"type": "disabled"})
         payload.pop("reasoning_effort", None)
     elif get_channel_for_model(target_model) == "minimax":
         # MiniMax: no thinking-disable param; ensure budget isn't exhausted before content

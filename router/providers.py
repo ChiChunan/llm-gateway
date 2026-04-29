@@ -10,9 +10,14 @@ class ProviderConfig:
     base_url: str
     api_key: str
     extra_headers: dict = field(default_factory=dict)
+    # 自定义认证 header 名，None 时使用默认的 Authorization: Bearer
+    auth_header: str | None = None
 
     def get_headers(self) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        if self.auth_header:
+            headers = {self.auth_header: self.api_key}
+        else:
+            headers = {"Authorization": f"Bearer {self.api_key}"}
         headers.update(self.extra_headers)
         return headers
 
@@ -87,11 +92,12 @@ def init_providers() -> dict[str, ProviderConfig]:
 
     # Xiaomi Mimo
     mimo_key = os.environ.get("MIMO_API_KEY", "")
-    mimo_base = os.environ.get("MIMO_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")
+    mimo_base = os.environ.get("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
     if mimo_key:
         providers["xiaomi"] = ProviderConfig(
             base_url=mimo_base,
             api_key=mimo_key,
+            auth_header="api-key",
         )
 
     return providers
