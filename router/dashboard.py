@@ -165,9 +165,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="table-card">
         <h3>Provider 开关</h3>
         <table>
-          <thead><tr>
-            <th>Provider</th><th>当前状态</th><th>活跃请求</th><th>操作</th>
-          </tr></thead>
+          <thead>
+            <tr>
+              <th style="width:40px"></th>
+              <th>名称</th>
+              <th style="width:80px">操作</th>
+            </tr>
+          </thead>
           <tbody id="providers-table-body"></tbody>
         </table>
       </div>
@@ -413,25 +417,50 @@ function switchTab(name) {
   if (name === 'config') loadProviders();
 }
 
-// 加载 Provider 列表
+// 加载 Provider 及其下属 Model 列表
 async function loadProviders() {
-  const r = await fetch('/api/config/providers');
-  const j = await r.json();
+  const [pr, mr] = await Promise.all([
+    fetch('/api/config/providers').then(r => r.json()),
+    fetch('/api/config/models').then(r => r.json()),
+  ]);
+  const providers = pr.data || [];
+  const modelsByProvider = mr.data || {};
   const tbody = document.getElementById('providers-table-body');
   tbody.innerHTML = '';
-  for (const p of j.data) {
-    const stateLabel = {'enabled':'运行中','draining':'关闭中','disabled':'已关闭'}[p.state] || p.state;
-    const stateColor = {'enabled':'var(--green)','draining':'var(--amber)','disabled':'var(--red)'}[p.state];
-    const btnLabel = p.enabled ? '关闭' : '开启';
-    const btnColor = p.enabled ? 'var(--red)' : 'var(--green)';
-    tbody.innerHTML += `<tr>
-      <td class="mono">${p.name}</td>
-      <td style="color:${stateColor}">${stateLabel}</td>
-      <td class="mono">${p.active_requests}</td>
-      <td><button onclick="toggleProvider('${p.name}',${!p.enabled})"
-          style="background:${btnColor};color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer">
-          ${btnLabel}</button></td>
+  const stateLabel = {'enabled':'运行中','draining':'关闭中','disabled':'已关闭'};
+  const stateColor = {'enabled':'var(--green)','draining':'var(--amber)','disabled':'var(--red)'};
+  for (const p of providers) {
+    const pLabel = stateLabel[p.state] || p.state;
+    const pColor = stateColor[p.state];
+    const pBtnLabel = p.enabled ? '关闭' : '开启';
+    const pBtnColor = p.enabled ? 'var(--red)' : 'var(--green)';
+    tbody.innerHTML += `<tr style="background:var(--card)">
+      <td colspan="2" style="font-weight:600;padding:10px 12px">
+        <span style="color:var(--accent)">Provider: ${p.name}</span>
+        <span style="color:${pColor};margin-left:12px;font-size:12px">${pLabel}</span>
+        ${p.active_requests > 0 ? `<span style="color:var(--muted);margin-left:8px;font-size:11px">${p.active_requests} 活跃</span>` : ''}
+      </td>
+      <td style="padding:10px 12px">
+        <button onclick="toggleProvider('${p.name}',${!p.enabled})"
+          style="background:${pBtnColor};color:#fff;border:none;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:12px">
+          ${pBtnLabel}</button>
+      </td>
     </tr>`;
+    const models = modelsByProvider[p.name] || [];
+    for (const m of models) {
+      const mBtnLabel = m.enabled ? '关闭' : '开启';
+      const mBtnColor = m.enabled ? 'var(--red)' : 'var(--green)';
+      const mDisabled = !p.enabled ? 'opacity:0.4;pointer-events:none' : '';
+      tbody.innerHTML += `<tr style="${mDisabled}">
+        <td style="padding:6px 12px 6px 28px;color:var(--muted);font-size:12px">└─</td>
+        <td class="mono" style="font-size:13px">${m.name}</td>
+        <td style="padding:6px 12px">
+          <button onclick="toggleModel('${m.name}',${!m.enabled})"
+            style="background:${mBtnColor};color:#fff;border:none;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px">
+            ${mBtnLabel}</button>
+        </td>
+      </tr>`;
+    }
   }
 }
 
@@ -441,6 +470,17 @@ async function toggleProvider(name, enable) {
   const r = await fetch(`/api/config/providers/${name}`, {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${apiKey}`},
+    body: JSON.stringify({enabled: enable})
+  });
+  if (!r.ok) { alert('操作失败'); return; }
+  await loadProviders();
+}
+
+// 切换 Model 开关
+async function toggleModel(name, enable) {
+  const r = await fetch(`/api/config/models/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${getApiKey()}`},
     body: JSON.stringify({enabled: enable})
   });
   if (!r.ok) { alert('操作失败'); return; }
