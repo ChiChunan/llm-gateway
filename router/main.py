@@ -151,31 +151,19 @@ def _has_image(messages: list[dict]) -> bool:
     return False
 
 
-def _extract_user_content(msg: dict) -> str:
-    """提取单条消息的文本内容。"""
-    content = msg.get("content", "")
-    if isinstance(content, list):
-        content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-    content = str(content)
-    if content.startswith("User:"):
-        content = content[5:].split("\nAssistant:")[0].strip()
-    return content
-
-
 def _get_session_key(messages: list[dict]) -> str | None:
-    """用前三条 user 消息拼 session 标识，区分不同对话轮次。
-    - 第1条取前200字符
-    - 第1+2条各取前200字符
-    - 第1+2+3条各取前100字符
-    """
-    limits = [200, 200, 100]
-    user_msgs = [m for m in messages if m.get("role") == "user"]
-    parts = []
-    for i, msg in enumerate(user_msgs[:3]):
-        limit = limits[i]
-        parts.append(_extract_user_content(msg)[:limit])
-    key = "|".join(parts)
-    return key or None
+    """取第一条 user 消息前200字符作为 session 标识，同一对话路由固定。"""
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+        content = str(content)
+        if content.startswith("User:"):
+            content = content[5:].split("\nAssistant:")[0].strip()
+        return content[:200] or None
+    return None
 
 
 GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "V.A.L.O.R.")
