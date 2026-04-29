@@ -126,10 +126,10 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
         import hashlib
         idx = int(hashlib.sha256(session_key.encode()).hexdigest(), 16) % len(available)
         ordered = available[idx:] + available[:idx]
-        logging.info(f"pick_model session_key={session_key!r} idx={idx} available={available} ordered={ordered}")
+        logging.warning(f"pick_model session_key={session_key!r} idx={idx} available={available} ordered={ordered}")
     else:
         ordered = available
-        logging.info(f"pick_model no_session_key available={available} ordered={ordered}")
+        logging.warning(f"pick_model no_session_key available={available} ordered={ordered}")
 
     # 按打乱后顺序返回第一个
     for model in ordered:
@@ -254,7 +254,7 @@ async def chat_completions(request: Request):
     requested_model = body.get("model", "auto")
     messages = body.get("messages", [])
     routing = cfg["routing"]
-    logging.info(f"chat_completions requested_model={requested_model!r}")
+    logging.warning(f"chat_completions requested_model={requested_model!r}")
 
     # 指定具体模型时直接路由，不走分类器
     if requested_model != "auto":
