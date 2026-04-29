@@ -114,3 +114,24 @@ def test_handle_429_no_plan_only_marks_single_channel():
     mgr.handle_429("ark", msg)
     assert mgr.is_available("ark") is False
     assert mgr.is_available("kimi") is True
+
+
+# ---- model 级别手动开关测试 ----
+
+def test_model_switch_disabled_blocks_routing():
+    mgr = ChannelManager(channels=["deepseek-v4-pro", "deepseek-v4-flash"])
+    mgr.set_model_enabled("deepseek-v4-pro", False)
+    assert not mgr.is_model_enabled("deepseek-v4-pro")
+    assert mgr.is_model_enabled("deepseek-v4-flash")
+
+
+def test_model_switch_default_enabled():
+    mgr = ChannelManager(channels=["deepseek-v4-pro"])
+    assert mgr.is_model_enabled("deepseek-v4-pro")
+
+
+def test_model_switch_reenable():
+    mgr = ChannelManager(channels=["deepseek-v4-pro"])
+    mgr.set_model_enabled("deepseek-v4-pro", False)
+    mgr.set_model_enabled("deepseek-v4-pro", True)
+    assert mgr.is_model_enabled("deepseek-v4-pro")

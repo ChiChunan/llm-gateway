@@ -24,6 +24,8 @@ class ChannelManager:
         self._provider_states: dict[str, ProviderState] = {}
         # 各 provider 活跃请求计数
         self._active_requests: dict[str, int] = {}
+        # model 级别手动开关（与 429 封禁无关）
+        self._model_enabled: dict[str, bool] = {}
         if plans:
             for plan_name, plan_cfg in plans.items():
                 members = plan_cfg.get("channels", [])
@@ -88,6 +90,14 @@ class ChannelManager:
             count -= 1
         if count == 0 and self._provider_states.get(provider) == ProviderState.DRAINING:
             self._provider_states[provider] = ProviderState.DISABLED
+
+    def set_model_enabled(self, model: str, enabled: bool):
+        """设置单个 model 的手动开关状态。"""
+        self._model_enabled[model] = enabled
+
+    def is_model_enabled(self, model: str) -> bool:
+        """检查 model 是否被手动开启（默认 True）。"""
+        return self._model_enabled.get(model, True)
 
     def earliest_recovery(self) -> Optional[datetime]:
         """返回最早恢复时间，全部可用时返回 None"""
