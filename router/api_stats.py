@@ -7,6 +7,7 @@ import yaml
 
 from usage import get_usage_db
 from provider_state import get_channel_mgr, get_config_path
+from providers import get_channel_for_model
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -100,6 +101,26 @@ def _build_provider_info(name: str) -> dict:
     }
 
 
+def _load_model_names() -> list[str]:
+    """从 routing.yaml 的 model_switches 取 model 名称列表。"""
+    config_path = get_config_path()
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    return list(cfg.get("model_switches", {}).keys())
+
+
+def _build_model_info(name: str) -> dict:
+    """组装单个 model 的状态字典。"""
+    channel_mgr = get_channel_mgr()
+    enabled = channel_mgr.is_model_enabled(name)
+    provider = get_channel_for_model(name)
+    return {
+        "name": name,
+        "provider": provider,
+        "enabled": enabled,
+    }
+
+
 @config_router.get("/providers")
 async def get_providers():
     """返回所有 provider 的当前运行状态。"""
@@ -134,3 +155,39 @@ async def update_provider(provider_name: str, body: ProviderSwitchRequest):
         raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc
 
     return _build_provider_info(provider_name)
+
+
+@config_router.get("/models")
+async def get_models():
+    """返回所有 model 的当前开关状态，按 provider 分组。"""
+    names = _load_model_names()
+    models = [_build_model_info(n) for n in names]
+    grouped: dict[str, list] = {}
+    for m in models:
+        grouped.setdefault(m["provider"], []).append(m)
+    return {"data": grouped}
+
+
+@config_router.post("/models/{model_name}")
+async def update_model(model_name: str, body: ProviderSwitchRequest):
+    """切换指定 model 的开关，并持久化到 routing.yaml。"""
+    known = _load_model_names()
+    if model_name not in known:
+        raise HTTPException(status_code=400, detail=f"未知 model: {model_name}")
+
+    channel_mgr = get_channel_mgr()
+    original_enabled = channel_mgr.is_model_enabled(model_name)
+    channel_mgr.set_model_enabled(model_name, body.enabled)
+
+    config_path = get_config_path()
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        cfg.setdefault("model_switches", {})[model_name] = body.enabled
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+    except Exception as exc:
+        channel_mgr.set_model_enabled(model_name, original_enabled)
+        raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc
+
+    return _build_model_info(model_name)

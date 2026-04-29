@@ -148,7 +148,7 @@ _PUBLIC_PATHS = {"/health", "/dashboard"}
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        is_readonly_config = request.url.path == "/api/config/providers" and request.method == "GET"
+        is_readonly_config = request.method == "GET" and request.url.path in {"/api/config/providers", "/api/config/models"}
         if request.url.path in _PUBLIC_PATHS or request.url.path.startswith("/static") or request.url.path.startswith("/api/stats") or is_readonly_config:
             return await call_next(request)
         auth = request.headers.get("Authorization", "")
