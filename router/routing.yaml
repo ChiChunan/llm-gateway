@@ -36,6 +36,16 @@ provider_switches:
   minimax: true
   deepseek: true
 
+# model 级别开关（true=启用，false=禁用）
+model_switches:
+  doubao-seed-2-0-lite: true
+  doubao-seed-2-0-pro: true
+  glm-5-1: true
+  kimi-for-coding: true
+  MiniMax-M2.7-highspeed: true
+  deepseek-v4-pro: true
+  deepseek-v4-flash: true
+
 # plan 级别联动：任意渠道触发 429，同 plan 下所有渠道一起标记
 plans:
   ark:
