@@ -91,6 +91,12 @@ class ChannelManager:
         if count == 0 and self._provider_states.get(provider) == ProviderState.DRAINING:
             self._provider_states[provider] = ProviderState.DISABLED
 
+    def clear_provider_bans(self, plan_name: str):
+        """开启 provider 时清除其 plan 内所有模型的 429 封禁，让路由立即生效。"""
+        for ch in self._plans.get(plan_name, []):
+            if ch in self._status:
+                self._status[ch] = None
+
     def set_model_enabled(self, model: str, enabled: bool):
         """设置单个 model 的手动开关状态。"""
         self._model_enabled[model] = enabled
@@ -138,8 +144,9 @@ class ChannelManager:
             until = now + timedelta(hours=5)
         self.mark_unavailable(channel, until=until)
         # plan 联动：同 plan 内其余成员使用相同解封时间
+        # 跳过已被手动禁用的模型，避免误封后续恢复时机
         plan_name = self._channel_to_plan.get(channel)
         if plan_name:
             for sibling in self._plans.get(plan_name, []):
-                if sibling != channel and sibling in self._status:
+                if sibling != channel and sibling in self._status and self._model_enabled.get(sibling, True):
                     self.mark_unavailable(sibling, until=until)

@@ -9,6 +9,7 @@ import yaml
 from usage import get_usage_db
 from provider_state import get_channel_mgr, get_config_path
 from providers import get_channel_for_model
+from channel import ProviderState
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -145,6 +146,8 @@ async def update_provider(provider_name: str, body: ProviderSwitchRequest):
     # 锁保护整个读-改-写过程，防止并发请求相互覆盖
     with _config_lock:
         channel_mgr.set_provider_state(provider_name, body.enabled)
+        if body.enabled:
+            channel_mgr.clear_provider_bans(provider_name)
 
         config_path = get_config_path()
         try:
@@ -154,7 +157,7 @@ async def update_provider(provider_name: str, body: ProviderSwitchRequest):
             with open(config_path, "w", encoding="utf-8") as f:
                 yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
         except Exception as exc:
-            channel_mgr.set_provider_state(provider_name, original_state.value == "enabled")
+            channel_mgr.set_provider_state(provider_name, original_state != ProviderState.DISABLED)
             raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc
 
     return _build_provider_info(provider_name)
@@ -184,6 +187,8 @@ async def update_model(model_name: str, body: ProviderSwitchRequest):
     # 锁保护整个读-改-写过程，防止并发请求相互覆盖
     with _config_lock:
         channel_mgr.set_model_enabled(model_name, body.enabled)
+        if body.enabled:
+            channel_mgr.mark_available(model_name)
 
         config_path = get_config_path()
         try:
