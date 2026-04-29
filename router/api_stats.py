@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
+import threading
 import yaml
 
 from usage import get_usage_db
@@ -10,6 +11,9 @@ from provider_state import get_channel_mgr, get_config_path
 from providers import get_channel_for_model
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
+
+# 读-改-写操作锁，防止并发写入 routing.yaml 导致状态被覆盖
+_config_lock = threading.Lock()
 
 
 @router.get("/summary")
@@ -136,23 +140,22 @@ async def update_provider(provider_name: str, body: ProviderSwitchRequest):
         raise HTTPException(status_code=400, detail=f"未知 provider: {provider_name}")
 
     channel_mgr = get_channel_mgr()
-    # 保存原始状态，用于写文件失败时回滚
     original_state = channel_mgr.get_provider_state(provider_name)
 
-    channel_mgr.set_provider_state(provider_name, body.enabled)
+    # 锁保护整个读-改-写过程，防止并发请求相互覆盖
+    with _config_lock:
+        channel_mgr.set_provider_state(provider_name, body.enabled)
 
-    # 持久化到 routing.yaml
-    config_path = get_config_path()
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        cfg.setdefault("provider_switches", {})[provider_name] = body.enabled
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    except Exception as exc:
-        # 写文件失败：回滚内存状态
-        channel_mgr.set_provider_state(provider_name, original_state.value == "enabled")
-        raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc
+        config_path = get_config_path()
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+            cfg.setdefault("provider_switches", {})[provider_name] = body.enabled
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        except Exception as exc:
+            channel_mgr.set_provider_state(provider_name, original_state.value == "enabled")
+            raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc
 
     return _build_provider_info(provider_name)
 
@@ -177,17 +180,20 @@ async def update_model(model_name: str, body: ProviderSwitchRequest):
 
     channel_mgr = get_channel_mgr()
     original_enabled = channel_mgr.is_model_enabled(model_name)
-    channel_mgr.set_model_enabled(model_name, body.enabled)
 
-    config_path = get_config_path()
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        cfg.setdefault("model_switches", {})[model_name] = body.enabled
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    except Exception as exc:
-        channel_mgr.set_model_enabled(model_name, original_enabled)
-        raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc
+    # 锁保护整个读-改-写过程，防止并发请求相互覆盖
+    with _config_lock:
+        channel_mgr.set_model_enabled(model_name, body.enabled)
+
+        config_path = get_config_path()
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+            cfg.setdefault("model_switches", {})[model_name] = body.enabled
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        except Exception as exc:
+            channel_mgr.set_model_enabled(model_name, original_enabled)
+            raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc
 
     return _build_model_info(model_name)

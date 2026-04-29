@@ -50,8 +50,6 @@ class ClassifyResult:
 
 
 _COORDINATOR_KEYWORDS = [
-    # 模型名
-    "kimi",
     # 规划/拆解
     "规划", "拆解", "方案", "计划", "设计", "架构",
     # 分析/检查/验证
@@ -64,15 +62,29 @@ _COORDINATOR_KEYWORDS = [
     "汇总", "整合", "梳理",
 ]
 
+# 移除 "kimi" 关键字：用户提及模型名不等于需要复杂模型
+# 注意：COORDINATOR 和 WRITER 关键字有重叠时，优先 WRITER（因为先检查 WRITER）
+_WRITER_KEYWORDS = [
+    # 写作/文档
+    "写", "写作", "文档", "文章", "博客", "报告", "总结", "概括", "摘要",
+    # 解释/说明
+    "解释", "说明", "讲解", "介绍", "科普", "回答",
+    # 翻译
+    "翻译", "译成", "译为",
+    # 闲聊/问答
+    "你好", "hi", "hello", "帮帮我", "请问", "问问",
+]
+
 
 def keyword_classify(text: str) -> ClassifyResult:
-    """ark 不可用时的关键字降级分类。"""
+    """ark 不可用时的关键字降级分类。优先级：COORDINATOR > WRITER > EXECUTOR。"""
     lower = text.lower()
-    complexity = (
-        Complexity.COORDINATOR
-        if any(kw in lower for kw in _COORDINATOR_KEYWORDS)
-        else Complexity.EXECUTOR
-    )
+    if any(kw in lower for kw in _COORDINATOR_KEYWORDS):
+        complexity = Complexity.COORDINATOR
+    elif any(kw in lower for kw in _WRITER_KEYWORDS):
+        complexity = Complexity.WRITER
+    else:
+        complexity = Complexity.EXECUTOR
     return ClassifyResult(complexity=complexity, model="keyword", prompt_tokens=0, completion_tokens=0, latency_ms=0)
 
 
@@ -83,6 +95,9 @@ class Classifier:
         self._model = model
         self._timeout = timeout
         self._extra_body = extra_body or {}
+        # 复用全局连接池，避免每次分类都新建 TCP+TLS 握手
+        from proxy import get_client
+        self._client = get_client()
 
     def extract_last_user_message(self, messages: list[dict]) -> str:
         user_msgs = [m for m in messages if m.get("role") == "user"]
@@ -97,31 +112,31 @@ class Classifier:
         """返回 (content, usage, latency_ms)"""
         prompt = CLASSIFY_PROMPT.format(content=content)
         start = time.monotonic()
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(
-                f"{self._base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                json={
-                    "model": self._model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 20,
-                    "temperature": 0,
-                    "reasoning_effort": "minimal",
-                    **self._extra_body,
-                },
-            )
-            latency = int((time.monotonic() - start) * 1000)
-            if resp.status_code == 429 and on_429:
-                err_msg = ""
-                try:
-                    err_msg = resp.json().get("error", {}).get("message", "")
-                except Exception:
-                    pass
-                on_429(self._model, err_msg)
-            resp.raise_for_status()
-            data = resp.json()
-            usage = data.get("usage", {}) or {}
-            return data["choices"][0]["message"]["content"], usage, latency
+        resp = await self._client.post(
+            f"{self._base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            json={
+                "model": self._model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 20,
+                "temperature": 0,
+                "reasoning_effort": "minimal",
+                **self._extra_body,
+            },
+            timeout=self._timeout,
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        if resp.status_code == 429 and on_429:
+            err_msg = ""
+            try:
+                err_msg = resp.json().get("error", {}).get("message", "")
+            except Exception:
+                pass
+            on_429(self._model, err_msg)
+        resp.raise_for_status()
+        data = resp.json()
+        usage = data.get("usage", {}) or {}
+        return data["choices"][0]["message"]["content"], usage, latency
 
     async def classify(self, last_user_message: str, on_429=None) -> Optional[ClassifyResult]:
         """分类成功返回 ClassifyResult，失败返回 None（调用方负责降级）"""

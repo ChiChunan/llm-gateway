@@ -1,80 +1,62 @@
 routing:
-  classifier: "doubao-seed-2-0-lite"
-
-  # coordinator：规划/拆解/分工 + 检查/review/验证
+  classifier: doubao-seed-2-0-lite
   coordinator_candidates:
-    - "deepseek-v4-pro"
-    - "glm-5-1"
-    - "kimi-for-coding"
-    - "mimo-v2.5-pro"
-
-  # writer：文字/文档/总结/解释/翻译
+  - deepseek-v4-pro
+  - glm-5-1
+  - kimi-for-coding
+  - mimo-v2.5-pro
   writer_candidates:
-    - "deepseek-v4-flash"
-    - "doubao-seed-2-0-pro"
-
-  # executor：代码/工具调用/具体问答/其他
+  - deepseek-v4-flash
+  - doubao-seed-2-0-pro
   executor_candidates:
-    - "deepseek-v4-flash"
-    - "MiniMax-M2.7-highspeed"
-    - "mimo-v2.5"
-
+  - deepseek-v4-flash
+  - MiniMax-M2.7-highspeed
+  - mimo-v2.5
   coordinator_fallback:
-    - "MiniMax-M2.7-highspeed"
-    - "doubao-seed-2-0-pro"
-
+  - MiniMax-M2.7-highspeed
+  - doubao-seed-2-0-pro
   writer_fallback:
-    - "MiniMax-M2.7-highspeed"
-    - "doubao-seed-2-0-pro"
-
+  - MiniMax-M2.7-highspeed
+  - doubao-seed-2-0-pro
   executor_fallback:
-    - "MiniMax-M2.7-highspeed"
-    - "doubao-seed-2-0-pro"
-
-  # 多模态：请求含图片时优先路由到此列表
+  - MiniMax-M2.7-highspeed
+  - doubao-seed-2-0-pro
   multimodal_candidates:
-    - "mimo-v2.5"
-    - "doubao-seed-2-0-pro"
-
-# provider 级别开关（true=启用，false=禁用）
+  - mimo-v2.5
+  - doubao-seed-2-0-pro
 provider_switches:
   ark: true
   kimi: true
   minimax: true
   deepseek: true
   xiaomi: true
-
-# model 级别开关（true=启用，false=禁用）
 model_switches:
   doubao-seed-2-0-lite: true
   doubao-seed-2-0-pro: true
   glm-5-1: true
   kimi-for-coding: true
   MiniMax-M2.7-highspeed: true
-  deepseek-v4-pro: true
+  deepseek-v4-pro: false
   deepseek-v4-flash: true
   mimo-v2.5-pro: true
   mimo-v2.5: true
-
-# plan 级别联动：任意渠道触发 429，同 plan 下所有渠道一起标记
 plans:
   ark:
     channels:
-      - "doubao-seed-2-0-lite"
-      - "doubao-seed-2-0-pro"
-      - "glm-5-1"
+    - doubao-seed-2-0-lite
+    - doubao-seed-2-0-pro
+    - glm-5-1
   kimi:
     channels:
-      - "kimi-for-coding"
+    - kimi-for-coding
   minimax:
     channels:
-      - "MiniMax-M2.7-highspeed"
+    - MiniMax-M2.7-highspeed
   deepseek:
     channels:
-      - "deepseek-v4-pro"
-      - "deepseek-v4-flash"
+    - deepseek-v4-pro
+    - deepseek-v4-flash
   xiaomi:
     channels:
-      - "mimo-v2.5-pro"
-      - "mimo-v2.5"
-
+    - mimo-v2.5-pro
+    - mimo-v2.5

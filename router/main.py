@@ -96,21 +96,19 @@ else:
 def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[str, object] | tuple[None, None]:
     """遍历候选列表，返回第一个可用且有 provider 的 (model, provider)。
 
-    session_key 非空时做一致性哈希：同一 session 固定起始模型，不可用时顺移。
+    - 会预先过滤掉不可用、被禁用、或无 provider 的模型
+    - 有 session_key 时：用一致性哈希打乱过滤后的列表，同 session 固定，不同 session 随机
+    - 无 session_key 时：按过滤后原始顺序遍历
     """
     if not candidates:
         return None, None
-    if session_key:
-        import hashlib
-        start = int(hashlib.sha256(session_key.encode()).hexdigest(), 16) % len(candidates)
-        ordered = candidates[start:] + candidates[:start]
-    else:
-        ordered = candidates
-    for model in ordered:
+
+    # 预过滤：只保留真正可用的模型
+    available = []
+    for model in candidates:
         provider = get_provider_for_model(model, providers)
         if provider is None:
             continue
-        # 检查 provider 级别开关
         provider_name = get_channel_for_model(model)
         if not channel_mgr.is_provider_available(provider_name):
             continue
@@ -118,7 +116,27 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
             continue
         if not channel_mgr.is_available(model):
             continue
-        return model, provider
+        available.append(model)
+
+    if not available:
+        return None, None
+
+    # 有 session_key：用一致性哈希打乱，同 session 固定，不同 session 均匀随机
+    if session_key:
+        import hashlib
+        import random
+        seed = int(hashlib.sha256(session_key.encode()).hexdigest(), 16) % (10 ** 9)
+        rng = random.Random(seed)
+        ordered = available.copy()
+        rng.shuffle(ordered)
+    else:
+        ordered = available
+
+    # 按打乱后顺序返回第一个
+    for model in ordered:
+        provider = get_provider_for_model(model, providers)
+        if provider is not None:
+            return model, provider
     return None, None
 
 
@@ -195,9 +213,11 @@ app.include_router(dashboard_router)
 @app.get("/health")
 async def health():
     available = channel_mgr.available_channels()
+    # 过滤掉 model_enabled=False 的模型，与 _pick_model 行为保持一致
+    truly_available = [m for m in available if channel_mgr.is_model_enabled(m)]
     earliest = channel_mgr.earliest_recovery()
     return {
-        "available_channels": available,
+        "available_channels": truly_available,
         "providers": list(providers.keys()),
         "earliest_recovery": earliest.isoformat() if earliest else None,
     }
