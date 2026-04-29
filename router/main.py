@@ -102,7 +102,7 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
         return None, None
     if session_key:
         import hashlib
-        start = int(hashlib.md5(session_key.encode()).hexdigest(), 16) % len(candidates)
+        start = int(hashlib.sha256(session_key.encode()).hexdigest(), 16) % len(candidates)
         ordered = candidates[start:] + candidates[:start]
     else:
         ordered = candidates
