@@ -249,6 +249,7 @@ async def chat_completions(request: Request):
     requested_model = body.get("model", "auto")
     messages = body.get("messages", [])
     routing = cfg["routing"]
+    logging.info(f"chat_completions requested_model={requested_model!r}")
 
     # 指定具体模型时直接路由，不走分类器
     if requested_model != "auto":
