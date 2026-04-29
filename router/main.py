@@ -122,6 +122,18 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
     return None, None
 
 
+def _has_image(messages: list[dict]) -> bool:
+    """检测 messages 中是否包含图片内容。"""
+    for msg in messages:
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") in ("image_url", "image"):
+                return True
+    return False
+
+
 def _get_session_key(messages: list[dict]) -> str | None:
     """取第一条 user 消息的首句内容作为 session 标识。
     兼容 Hermes 将历史拼入 user 消息的格式（User: xxx\nAssistant: xxx）。
@@ -237,36 +249,41 @@ async def chat_completions(request: Request):
             )
         target_model, target_provider = requested_model, provider
     else:
-        last_msg = classifier.extract_last_user_message(messages)
-        ark_available = channel_mgr.is_provider_available("ark") and any(
-            channel_mgr.is_available(m)
-            for m in ["doubao-seed-2-0-lite", "doubao-seed-2-0-pro", "glm-5-1"]
-        )
-        if ark_available:
-            classify_result = await classifier.classify(last_msg, on_429=channel_mgr.handle_429)
-        else:
-            logging.warning(f"classifier skipped: ark unavailable, fallback to keyword")
-            classify_result = None
-        # ark 不可用或分类失败，降级为关键字匹配
-        if classify_result is None:
-            if ark_available:
-                logging.warning("classifier returned None (failed), fallback to keyword")
-            classify_result = keyword_classify(last_msg)
-        complexity = classify_result.complexity
         session_key = _get_session_key(messages)
+        complexity = None
+        classify_result = None
+        # 含图片时跳过分类器，直接路由到多模态候选列表
+        if _has_image(messages):
+            target_model, target_provider = _pick_model(routing.get("multimodal_candidates", []), session_key)
+        else:
+            last_msg = classifier.extract_last_user_message(messages)
+            ark_available = channel_mgr.is_provider_available("ark") and any(
+                channel_mgr.is_available(m)
+                for m in ["doubao-seed-2-0-lite", "doubao-seed-2-0-pro", "glm-5-1"]
+            )
+            if ark_available:
+                classify_result = await classifier.classify(last_msg, on_429=channel_mgr.handle_429)
+            else:
+                logging.warning(f"classifier skipped: ark unavailable, fallback to keyword")
+                classify_result = None
+            if classify_result is None:
+                if ark_available:
+                    logging.warning("classifier returned None (failed), fallback to keyword")
+                classify_result = keyword_classify(last_msg)
+            complexity = classify_result.complexity
 
-        if complexity == Complexity.COORDINATOR:
-            target_model, target_provider = _pick_model(routing.get("coordinator_candidates", []), session_key)
-            if target_model is None:
-                target_model, target_provider = _pick_model(routing.get("coordinator_fallback", []), session_key)
-        elif complexity == Complexity.WRITER:
-            target_model, target_provider = _pick_model(routing.get("writer_candidates", []), session_key)
-            if target_model is None:
-                target_model, target_provider = _pick_model(routing.get("writer_fallback", []), session_key)
-        else:  # EXECUTOR
-            target_model, target_provider = _pick_model(routing.get("executor_candidates", []), session_key)
-            if target_model is None:
-                target_model, target_provider = _pick_model(routing.get("executor_fallback", []), session_key)
+            if complexity == Complexity.COORDINATOR:
+                target_model, target_provider = _pick_model(routing.get("coordinator_candidates", []), session_key)
+                if target_model is None:
+                    target_model, target_provider = _pick_model(routing.get("coordinator_fallback", []), session_key)
+            elif complexity == Complexity.WRITER:
+                target_model, target_provider = _pick_model(routing.get("writer_candidates", []), session_key)
+                if target_model is None:
+                    target_model, target_provider = _pick_model(routing.get("writer_fallback", []), session_key)
+            else:  # EXECUTOR
+                target_model, target_provider = _pick_model(routing.get("executor_candidates", []), session_key)
+                if target_model is None:
+                    target_model, target_provider = _pick_model(routing.get("executor_fallback", []), session_key)
 
         if target_model is None:
             earliest = channel_mgr.earliest_recovery()
@@ -283,7 +300,10 @@ async def chat_completions(request: Request):
     if requested_model != "auto":
         retry_candidates = [(target_model, target_provider)]
     else:
-        if complexity == Complexity.COORDINATOR:
+        if complexity is None:
+            # 多模态路径（图片请求），只在 multimodal_candidates 内重试
+            all_candidates = routing.get("multimodal_candidates", [])
+        elif complexity == Complexity.COORDINATOR:
             all_candidates = routing.get("coordinator_candidates", []) + routing.get("coordinator_fallback", [])
         elif complexity == Complexity.WRITER:
             all_candidates = routing.get("writer_candidates", []) + routing.get("writer_fallback", [])

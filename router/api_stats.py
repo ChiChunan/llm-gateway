@@ -148,7 +148,7 @@ async def update_provider(provider_name: str, body: ProviderSwitchRequest):
             cfg = yaml.safe_load(f)
         cfg.setdefault("provider_switches", {})[provider_name] = body.enabled
         with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
     except Exception as exc:
         # 写文件失败：回滚内存状态
         channel_mgr.set_provider_state(provider_name, original_state.value == "enabled")
@@ -185,7 +185,7 @@ async def update_model(model_name: str, body: ProviderSwitchRequest):
             cfg = yaml.safe_load(f)
         cfg.setdefault("model_switches", {})[model_name] = body.enabled
         with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
     except Exception as exc:
         channel_mgr.set_model_enabled(model_name, original_enabled)
         raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc

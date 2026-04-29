@@ -31,6 +31,11 @@ routing:
     - "MiniMax-M2.7-highspeed"
     - "doubao-seed-2-0-pro"
 
+  # 多模态：请求含图片时优先路由到此列表
+  multimodal_candidates:
+    - "mimo-v2.5"
+    - "doubao-seed-2-0-pro"
+
 # provider 级别开关（true=启用，false=禁用）
 provider_switches:
   ark: true
