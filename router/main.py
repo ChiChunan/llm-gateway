@@ -69,6 +69,8 @@ channel_mgr = ChannelManager(
 # 从配置加载 provider 初始开关状态
 for provider, enabled in cfg.get("provider_switches", {}).items():
     channel_mgr.set_provider_state(provider, bool(enabled))
+for model, enabled in cfg.get("model_switches", {}).items():
+    channel_mgr.set_model_enabled(model, bool(enabled))
 _pstate.set_channel_mgr(channel_mgr, "routing.yaml")
 
 usage_db = init_usage_db()
@@ -111,6 +113,8 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> tuple[
         # 检查 provider 级别开关
         provider_name = get_channel_for_model(model)
         if not channel_mgr.is_provider_available(provider_name):
+            continue
+        if not channel_mgr.is_model_enabled(model):
             continue
         if not channel_mgr.is_available(model):
             continue
@@ -294,7 +298,7 @@ async def chat_completions(request: Request):
             seen.add(m)
             p = get_provider_for_model(m, providers)
             provider_name = get_channel_for_model(m)
-            if p and channel_mgr.is_provider_available(provider_name) and channel_mgr.is_available(m):
+            if p and channel_mgr.is_provider_available(provider_name) and channel_mgr.is_model_enabled(m) and channel_mgr.is_available(m):
                 retry_candidates.append((m, p))
 
     last_error = None
