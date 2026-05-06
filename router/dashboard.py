@@ -341,9 +341,9 @@ async function loadTokenChart(days = 7) {
   const rows = resp.data || [];
 
   const labels = rows.map(r => r.grp_model || r.grp || r.model || '-');
-  const promptData = rows.map(r => r.total_prompt_tokens || 0);
-  const compData = rows.map(r => r.total_completion_tokens || 0);
-  const cachedData = rows.map(r => r.total_cached_tokens || 0);
+  const cachedData    = rows.map(r => r.total_cached_tokens || 0);
+  const nonCachedData = rows.map(r => Math.max(0, (r.total_prompt_tokens || 0) - (r.total_cached_tokens || 0)));
+  const compData      = rows.map(r => r.total_completion_tokens || 0);
 
   if (tokenChartInstance) tokenChartInstance.destroy();
   tokenChartInstance = new Chart(document.getElementById('tokenChart'), {
@@ -351,9 +351,9 @@ async function loadTokenChart(days = 7) {
     data: {
       labels,
       datasets: [
-        { label: '输入', data: promptData, backgroundColor: '#22c55e', borderRadius: 3 },
-        { label: '输出', data: compData, backgroundColor: '#f59e0b', borderRadius: 3 },
-        { label: '缓存命中', data: cachedData, backgroundColor: '#a855f7', borderRadius: 3 },
+        { label: '缓存命中', data: cachedData, backgroundColor: '#a855f7', borderRadius: 3, stack: 'input' },
+        { label: '输入(未命中)', data: nonCachedData, backgroundColor: '#22c55e', borderRadius: 3, stack: 'input' },
+        { label: '输出', data: compData, backgroundColor: '#f59e0b', borderRadius: 3, stack: 'output' },
       ]
     },
     options: {
