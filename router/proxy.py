@@ -52,6 +52,25 @@ def extract_channel_from_model(model: str) -> str:
     return get_channel_for_model(model)
 
 
+def _normalize_usage(usage: dict) -> dict:
+    """将 provider usage 字段统一为内部格式。
+
+    MiniMax 的 prompt_tokens 只统计未命中部分，cached_tokens 是命中部分，
+    与 OpenAI 规范（prompt_tokens 含缓存）不同，需要合并为总输入。
+    """
+    prompt = usage.get("prompt_tokens", 0) or 0
+    completion = usage.get("completion_tokens", 0) or 0
+    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
+    # MiniMax 非标准：cached > prompt 说明 prompt_tokens 仅为未命中部分
+    if cached > prompt:
+        prompt = prompt + cached
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "cached_tokens": cached,
+    }
+
+
 def _parse_usage_from_chunk(line: str) -> dict | None:
     """Extract usage from an SSE data line like: data: {"choices":[],"usage":{...}}
 
@@ -69,11 +88,7 @@ def _parse_usage_from_chunk(line: str) -> dict | None:
     usage = obj.get("usage")
     if not usage or not isinstance(usage, dict):
         return None
-    return {
-        "prompt_tokens": usage.get("prompt_tokens", 0) or 0,
-        "completion_tokens": usage.get("completion_tokens", 0) or 0,
-        "cached_tokens": usage.get("prompt_tokens_details", {}).get("cached_tokens", 0) or 0,
-    }
+    return _normalize_usage(usage)
 
 
 async def forward_request(
@@ -183,11 +198,12 @@ async def _json_response(
 
     usage = content.get("usage")
     if usage and isinstance(usage, dict):
+        u = _normalize_usage(usage)
         db.record(
             target_model, channel, role=role,
-            prompt_tokens=usage.get("prompt_tokens", 0) or 0,
-            completion_tokens=usage.get("completion_tokens", 0) or 0,
-            cached_tokens=usage.get("prompt_tokens_details", {}).get("cached_tokens", 0) or 0,
+            prompt_tokens=u["prompt_tokens"],
+            completion_tokens=u["completion_tokens"],
+            cached_tokens=u["cached_tokens"],
             status_code=resp.status_code, latency_ms=latency,
         )
     else:
