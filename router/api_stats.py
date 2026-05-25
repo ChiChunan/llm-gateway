@@ -5,16 +5,39 @@ from pydantic import BaseModel
 from typing import Optional
 import threading
 import yaml
+import time
 
 from usage import get_usage_db
 from provider_state import get_channel_mgr, get_config_path
 from providers import get_channel_for_model
-from channel import ProviderState
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 # 读-改-写操作锁，防止并发写入 routing.yaml 导致状态被覆盖
 _config_lock = threading.Lock()
+
+# 缓存 _load_model_names 的结果
+# 配置只在 POST 变更时才失效，缓存有效期用时间兜底
+_config_cache: dict[str, tuple[float, any]] = {}
+_CONFIG_CACHE_TTL = 30.0  # 秒
+
+
+def _get_cached(key: str, loader: callable) -> any:
+    """带 TTL 的配置缓存读。"""
+    import time as _t
+    now = _t.time()
+    if key in _config_cache:
+        ts, val = _config_cache[key]
+        if now - ts < _CONFIG_CACHE_TTL:
+            return val
+    val = loader()
+    _config_cache[key] = (now, val)
+    return val
+
+
+def _invalidate_config_cache():
+    """配置变更时清除缓存。"""
+    _config_cache.clear()
 
 
 @router.get("/summary")
@@ -22,20 +45,22 @@ async def stats_summary(
     since: Optional[str] = None,
     until: Optional[str] = None,
     group_by: str = Query("model", regex="^(model|channel)$"),
+    role_filter: Optional[str] = Query(None, description="筛选特定角色，如 'request' 排除分类器，'classifier' 只看分类器，留空则包含全部"),
 ):
     """Aggregated usage summary grouped by model or channel."""
     db = get_usage_db()
-    return {"data": db.get_summary(since=since, until=until, group_by=group_by)}
+    return {"data": db.get_summary(since=since, until=until, group_by=group_by, role_filter=role_filter)}
 
 
 @router.get("/daily")
 async def stats_daily(
     since: Optional[str] = None,
     until: Optional[str] = None,
+    role_filter: Optional[str] = Query("request", description="筛选角色：'request' 排除分类器(默认)，'classifier' 只看分类器，留空同默认"),
 ):
-    """Daily usage breakdown per model."""
+    """Daily usage breakdown per model (默认排除分类器请求)."""
     db = get_usage_db()
-    return {"data": db.get_daily(since=since, until=until)}
+    return {"data": db.get_daily(since=since, until=until, role_filter=role_filter)}
 
 
 @router.get("/logs")
@@ -49,10 +74,13 @@ async def stats_logs(
 
 
 @router.get("/hourly")
-async def stats_hourly(date: Optional[str] = None):
-    """Hourly usage breakdown for a given date (default: today)."""
+async def stats_hourly(
+    date: Optional[str] = None,
+    role_filter: Optional[str] = Query("request", description="筛选角色：'request' 排除分类器(默认)，'classifier' 只看分类器，留空同默认"),
+):
+    """Hourly usage breakdown for a given date (default: today, 默认排除分类器请求)."""
     db = get_usage_db()
-    return {"data": db.get_hourly(date=date)}
+    return {"data": db.get_hourly(date=date, role_filter=role_filter)}
 
 
 @router.get("/classifier")
@@ -76,42 +104,23 @@ async def stats_totals():
     return {"data": db.get_total_stats()}
 
 
-# ─── Config Router ────────────────────────────────────────────────────────────
+# ─── Config Router (model switches only) ─────────────────────────────────────
 
 config_router = APIRouter(prefix="/api/config", tags=["config"])
 
 
-class ProviderSwitchRequest(BaseModel):
+class ModelSwitchRequest(BaseModel):
     enabled: bool
 
 
-def _load_provider_names() -> list[str]:
-    """从 routing.yaml 的 provider_switches 取 provider 名称列表。"""
-    config_path = get_config_path()
-    with open(config_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    return list(cfg.get("provider_switches", {}).keys())
-
-
-def _build_provider_info(name: str) -> dict:
-    """组装单个 provider 的状态字典。"""
-    channel_mgr = get_channel_mgr()
-    state = channel_mgr.get_provider_state(name)
-    active = channel_mgr.get_active_requests(name)
-    return {
-        "name": name,
-        "state": state.value,
-        "active_requests": active,
-        "enabled": channel_mgr.is_provider_available(name),
-    }
-
-
 def _load_model_names() -> list[str]:
-    """从 routing.yaml 的 model_switches 取 model 名称列表。"""
-    config_path = get_config_path()
-    with open(config_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    return list(cfg.get("model_switches", {}).keys())
+    """从 routing.yaml 的 model_switches 取 model 名称列表（带缓存）。"""
+    def _read():
+        config_path = get_config_path()
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        return list(cfg.get("model_switches", {}).keys())
+    return _get_cached("model_names", _read)
 
 
 def _build_model_info(name: str) -> dict:
@@ -126,43 +135,6 @@ def _build_model_info(name: str) -> dict:
     }
 
 
-@config_router.get("/providers")
-async def get_providers():
-    """返回所有 provider 的当前运行状态。"""
-    names = _load_provider_names()
-    return {"data": [_build_provider_info(n) for n in names]}
-
-
-@config_router.post("/providers/{provider_name}")
-async def update_provider(provider_name: str, body: ProviderSwitchRequest):
-    """切换指定 provider 的开关，并持久化到 routing.yaml。"""
-    known = _load_provider_names()
-    if provider_name not in known:
-        raise HTTPException(status_code=400, detail=f"未知 provider: {provider_name}")
-
-    channel_mgr = get_channel_mgr()
-    original_state = channel_mgr.get_provider_state(provider_name)
-
-    # 锁保护整个读-改-写过程，防止并发请求相互覆盖
-    with _config_lock:
-        channel_mgr.set_provider_state(provider_name, body.enabled)
-        if body.enabled:
-            channel_mgr.clear_provider_bans(provider_name)
-
-        config_path = get_config_path()
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
-            cfg.setdefault("provider_switches", {})[provider_name] = body.enabled
-            with open(config_path, "w", encoding="utf-8") as f:
-                yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-        except Exception as exc:
-            channel_mgr.set_provider_state(provider_name, original_state != ProviderState.DISABLED)
-            raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc
-
-    return _build_provider_info(provider_name)
-
-
 @config_router.get("/models")
 async def get_models():
     """返回所有 model 的当前开关状态，按 provider 分组。"""
@@ -175,7 +147,7 @@ async def get_models():
 
 
 @config_router.post("/models/{model_name}")
-async def update_model(model_name: str, body: ProviderSwitchRequest):
+async def update_model(model_name: str, body: ModelSwitchRequest):
     """切换指定 model 的开关，并持久化到 routing.yaml。"""
     known = _load_model_names()
     if model_name not in known:
@@ -201,4 +173,5 @@ async def update_model(model_name: str, body: ProviderSwitchRequest):
             channel_mgr.set_model_enabled(model_name, original_enabled)
             raise HTTPException(status_code=500, detail=f"写入配置失败: {exc}") from exc
 
+    _invalidate_config_cache()
     return _build_model_info(model_name)

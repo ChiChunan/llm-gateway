@@ -1,4 +1,4 @@
-"""Dashboard: embedded HTML dashboard for usage stats."""
+"""Dashboard: mobile-first, no external CDN, pure CSS charts."""
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
@@ -9,203 +9,255 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>LLM Gateway Dashboard</title>
-<script src="https://cdn.bootcdn.net/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  :root {
-    --bg: #0f172a; --card: #1e293b; --border: #334155;
-    --text: #e2e8f0; --muted: #94a3b8; --accent: #3b82f6;
-    --green: #22c55e; --amber: #f59e0b; --red: #ef4444; --purple: #a855f7;
+:root {
+  --bg: #0f172a; --card: #1e293b; --border: #334155;
+  --text: #e2e8f0; --muted: #94a3b8; --accent: #3b82f6;
+  --green: #22c55e; --amber: #f59e0b; --red: #ef4444; --purple: #a855f7;
+  --cyan: #06b6d4; --pink: #ec4899;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; -webkit-text-size-adjust: 100%; }
+
+/* Header */
+.header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: var(--bg); z-index: 10; }
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .refresh { background: var(--accent); color: #fff; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+.header .refresh:active { opacity: 0.7; }
+
+/* Container */
+.container { max-width: 1280px; margin: 0 auto; padding: 16px; }
+
+/* Tab nav */
+.tab-nav { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.tab-btn { background: none; border: none; color: var(--muted); padding: 10px 16px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: color 0.15s; -webkit-tap-highlight-color: transparent; }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
+/* Stats cards */
+.stats-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+@media (min-width: 768px) {
+  .stats-row { grid-template-columns: repeat(4, 1fr); }
+}
+.stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.stat-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.stat-card .value { font-size: 24px; font-weight: 700; }
+.stat-card .value.blue { color: var(--accent); }
+.stat-card .value.green { color: var(--green); }
+.stat-card .value.amber { color: var(--amber); }
+.stat-card .value.purple { color: var(--purple); }
+
+/* Bar chart (CSS only) */
+.chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; display: flex; flex-direction: column; }
+.chart-card h3 { font-size: 13px; color: var(--muted); margin-bottom: 12px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.bar-group { margin-bottom: 10px; }
+.bar-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 12px; }
+.bar-label .name { color: var(--text); max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-label .val { color: var(--muted); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; }
+.bar-track { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; min-width: 2px; }
+
+/* Scrollable chart content area */
+.chart-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 340px;
+  padding-right: 4px;
+}
+@media (max-width: 767px) {
+  .chart-scroll {
+    height: 290px;
   }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-  .header { padding: 20px 32px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
-  .header h1 { font-size: 20px; font-weight: 600; }
-  .header .refresh { background: var(--accent); color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .header .refresh:hover { opacity: 0.85; }
-  .container { max-width: 1280px; margin: 0 auto; padding: 24px 32px; }
+}
+.chart-scroll::-webkit-scrollbar { width: 4px; }
+.chart-scroll::-webkit-scrollbar-track { background: transparent; }
+.chart-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.chart-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
-  /* Stats cards */
-  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
-  .stat-card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-  .stat-card .value { font-size: 28px; font-weight: 700; }
-  .stat-card .value.blue { color: var(--accent); }
-  .stat-card .value.green { color: var(--green); }
-  .stat-card .value.amber { color: var(--amber); }
-  .stat-card .value.purple { color: var(--purple); }
-
-  /* Chart section */
-  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
-  .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
-  .chart-card h3 { font-size: 14px; color: var(--muted); margin-bottom: 16px; font-weight: 500; }
-  .day-btn { background: var(--border); border: none; color: var(--muted); padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
-  .day-btn.active { background: #3b82f6; color: #fff; }
-  .day-btn:hover:not(.active) { background: #334155; color: #e2e8f0; }
-  .chart-wrap { position: relative; height: 260px; }
-
-  /* Model table */
-  .table-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 24px; }
-  .table-card h3 { font-size: 14px; color: var(--muted); margin-bottom: 16px; font-weight: 500; }
-  table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-  td { padding: 12px; font-size: 14px; border-bottom: 1px solid var(--border); }
-  tr:last-child td { border-bottom: none; }
-  .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .badge.ark { background: #1e3a5f; color: #60a5fa; }
-  .badge.kimi { background: #3b1f4a; color: #c084fc; }
-  .badge.minimax { background: #1a3d2e; color: #4ade80; }
-  .badge.deepseek { background: #1a2e3d; color: #38bdf8; }
-  .badge.xiaomi { background: #3d1a1a; color: #f87171; }
-
-  /* Recent logs */
-  .logs-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
-  .logs-card h3 { font-size: 14px; color: var(--muted); margin-bottom: 16px; font-weight: 500; }
-  .log-row { display: grid; grid-template-columns: 140px 140px 80px 80px 80px 80px 80px; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; align-items: center; }
-  .log-row:last-child { border-bottom: none; }
-  .log-header { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-
-  @media (max-width: 768px) {
-    .charts-row { grid-template-columns: 1fr; }
-    .container { padding: 16px; }
-    .log-row { grid-template-columns: 1fr 1fr; }
+/* Scrollable table area */
+.table-scroll {
+  overflow-y: auto;
+  overflow-x: auto;
+  height: 640px;
+  padding-right: 4px;
+}
+@media (max-width: 767px) {
+  .table-scroll {
+    height: 520px;
   }
+}
+.table-scroll::-webkit-scrollbar { height: 4px; width: 4px; }
+.table-scroll::-webkit-scrollbar-track { background: transparent; }
+.table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.table-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
-  .loading { text-align: center; padding: 40px; color: var(--muted); }
+/* Donut chart (CSS conic-gradient) */
+.donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.donut { width: 120px; height: 120px; border-radius: 50%; flex-shrink: 0; }
+.donut-legend { flex: 1; min-width: 140px; }
+.donut-legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.donut-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
-  /* 标签页导航 */
-  .tab-nav { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
-  .tab-btn { background: none; border: none; color: var(--muted); padding: 10px 18px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color 0.15s; }
-  .tab-btn:hover { color: var(--text); }
-  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-  .tab-pane { display: none; }
-  .tab-pane.active { display: block; }
+/* Day buttons */
+.day-btns { display: flex; gap: 4px; }
+.day-btn { background: var(--border); border: none; color: var(--muted); padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; -webkit-tap-highlight-color: transparent; }
+.day-btn.active { background: var(--accent); color: #fff; }
+
+/* Model table */
+.table-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; overflow: hidden; display: flex; flex-direction: column; }
+.table-card h3 { font-size: 13px; color: var(--muted); margin-bottom: 12px; font-weight: 500; flex-shrink: 0; }
+table { width: 100%; border-collapse: collapse; min-width: 600px; }
+th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+td { padding: 10px; font-size: 13px; border-bottom: 1px solid var(--border); }
+tr:last-child td { border-bottom: none; }
+.mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+.badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+.badge.ark { background: #1e3a5f; color: #60a5fa; }
+.badge.kimi { background: #3b1f4a; color: #c084fc; }
+.badge.minimax { background: #1a3d2e; color: #4ade80; }
+.badge.deepseek { background: #1a2e3d; color: #38bdf8; }
+.badge.xiaomi { background: #3d1a1a; color: #f87171; }
+.badge.longcat { background: #2d2a1a; color: #fbbf24; }
+.badge.aliyuncs { background: #2a1a3d; color: #e879f9; }
+.badge.dashscope { background: #2a1a3d; color: #e879f9; }
+
+/* Provider config cards */
+.config-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.config-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+.config-card-provider { font-weight:600; font-size:14px; color:var(--accent); text-transform:capitalize; }
+.config-card-badge { font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; }
+.config-card-badge.ok { background:#1a3d2e; color:#4ade80; }
+.config-card-badge.warn { background:#3d2a1a; color:#fb923c; }
+.config-card-models { display:flex; flex-direction:column; gap:6px; }
+.config-model-row { display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:rgba(255,255,255,0.03); border-radius:6px; }
+.config-model-info { display:flex; align-items:center; gap:8px; min-width:0; }
+.config-model-name { font-family:'SF Mono','Fira Code',monospace; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:130px; }
+.config-status-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.config-status-dot.on { background:var(--green); }
+.config-status-dot.off { background:var(--red); }
+
+/* Toggle button */
+.toggle-btn { color:#fff; border:none; padding:4px 10px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:600; -webkit-tap-highlight-color:transparent; transition:opacity 0.15s; }
+.toggle-btn:hover { opacity:0.8; }
+.toggle-btn:active { opacity:0.6; }
+
+/* Loading */
+.loading { text-align: center; padding: 40px; color: var(--muted); font-size: 14px; }
+
+/* Status indicator */
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.status-dot.on { background: var(--green); }
+.status-dot.off { background: var(--red); }
+.status-dot.draining { background: var(--amber); }
+
+/* Two-column layout for charts on desktop */
+@media (min-width: 768px) {
+  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .charts-row .chart-card { margin-bottom: 0; }
+}
 </style>
 </head>
 <body>
-  <div class="header">
-    <h1>🤖 LLM Gateway Dashboard</h1>
-    <button class="refresh" onclick="loadAll()">↻ 刷新</button>
+<div class="header">
+  <h1>🤖 LLM Gateway</h1>
+  <button class="refresh" onclick="loadAll(); loadModels();">↻ 刷新</button>
+</div>
+<div class="container">
+  <div class="tab-nav">
+    <button class="tab-btn active" onclick="switchTab('overview')">概览</button>
+    <button class="tab-btn" onclick="switchTab('config')">配置</button>
   </div>
-  <div class="container">
-    <!-- 标签页导航 -->
-    <div class="tab-nav">
-      <button class="tab-btn active" onclick="switchTab('overview')">概览</button>
-      <button class="tab-btn" onclick="switchTab('config')">配置</button>
-    </div>
 
-    <!-- 概览标签页 -->
-    <div id="tab-overview" class="tab-pane active">
-
-    <!-- Stats cards -->
+  <div id="tab-overview" class="tab-pane active">
     <div class="stats-row" id="statsRow">
       <div class="stat-card"><div class="label">总请求数</div><div class="value blue" id="totalReqs">-</div></div>
       <div class="stat-card"><div class="label">输入 Tokens</div><div class="value green" id="totalPrompt">-</div></div>
       <div class="stat-card"><div class="label">输出 Tokens</div><div class="value amber" id="totalComp">-</div></div>
-      <div class="stat-card"><div class="label">缓存命中 Tokens</div><div class="value purple" id="totalCached">-</div></div>
+      <div class="stat-card"><div class="label">缓存命中</div><div class="value purple" id="totalCached">-</div></div>
     </div>
 
-    <!-- Charts -->
-    <div style="margin-bottom:24px;">
+    <div class="charts-row">
+      <!-- Daily requests bar chart -->
       <div class="chart-card">
-        <h3 style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>
           <span>每日请求数 (按模型)</span>
-          <span style="display:flex;gap:6px;">
+          <span class="day-btns" id="dailyBtns">
             <button class="day-btn active" data-days="7">近7天</button>
             <button class="day-btn" data-days="3">近3天</button>
             <button class="day-btn" data-days="1">今天</button>
           </span>
         </h3>
-        <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
+        <div class="chart-scroll" id="dailyBars"><div class="loading">加载中...</div></div>
       </div>
-    </div>
 
-    <div class="charts-row">
+      <!-- Token distribution bar chart -->
       <div class="chart-card">
-        <h3 style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>
           <span>Token 消耗分布</span>
-          <span style="display:flex;gap:6px;">
-            <button class="day-btn token-btn active" data-days="7">近7天</button>
-            <button class="day-btn token-btn" data-days="3">近3天</button>
-            <button class="day-btn token-btn" data-days="1">今天</button>
+          <span class="day-btns" id="tokenBtns">
+            <button class="day-btn active" data-days="7">近7天</button>
+            <button class="day-btn" data-days="3">近3天</button>
+            <button class="day-btn" data-days="1">今天</button>
           </span>
         </h3>
-        <div class="chart-wrap"><canvas id="tokenChart"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <h3>路由模型用量</h3>
-        <div class="chart-wrap"><canvas id="modelReqChart"></canvas></div>
+        <div class="chart-scroll" id="tokenBars"><div class="loading">加载中...</div></div>
       </div>
     </div>
 
     <!-- Model summary table -->
     <div class="table-card">
       <h3>模型用量汇总</h3>
-      <table>
-        <thead><tr>
-          <th>模型</th><th>渠道</th><th>请求数</th><th>输入 Tokens</th><th>输出 Tokens</th><th>缓存 Tokens</th><th>平均延迟</th>
-        </tr></thead>
-        <tbody id="modelTable"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>模型</th><th>渠道</th><th>请求数</th><th>输入</th><th>输出</th><th>缓存</th><th>延迟</th>
+          </tr></thead>
+          <tbody id="modelTable"></tbody>
+        </table>
+      </div>
     </div>
 
     <!-- Recent logs -->
-    <div class="logs-card">
+    <div class="table-card">
       <h3>最近请求</h3>
-      <div class="log-row log-header">
-        <span>时间</span><span>模型</span><span>渠道</span><span>输入</span><span>输出</span><span>缓存</span><span>延迟</span>
-      </div>
-      <div id="logsList"></div>
+      <div class="table-scroll" id="logsList"><div class="loading">加载中...</div></div>
     </div>
-
-    </div><!-- /tab-overview -->
-
-    <!-- 配置标签页 -->
-    <div id="tab-config" class="tab-pane">
-      <div class="table-card">
-        <h3>Provider 开关</h3>
-        <table>
-          <thead>
-            <tr>
-              <th style="width:40px"></th>
-              <th>名称</th>
-              <th style="width:80px">操作</th>
-            </tr>
-          </thead>
-          <tbody id="providers-table-body"></tbody>
-        </table>
-      </div>
-    </div><!-- /tab-config -->
-
   </div>
 
-<script>
-const COLORS = {
-  ark: '#3b82f6', kimi: '#a855f7', minimax: '#22c55e',
-  'glm-5-1': '#3b82f6', 'doubao-seed-2-0-pro': '#60a5fa',
-  'doubao-seed-2-0-lite': '#93c5fd', 'kimi-for-coding': '#a855f7',
-  'MiniMax-M2.7-highspeed': '#22c55e'
-};
-function getColor(key) { return COLORS[key] || '#64748b'; }
+  <div id="tab-config" class="tab-pane">
+    <div id="configCards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;"></div>
+  </div>
+</div>
 
+<script>
 function fmt(n) {
   if (n === null || n === undefined) return '-';
   if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
   if (n >= 1000) return (n/1000).toFixed(1) + 'K';
   return n.toString();
 }
-
 function fmtMs(ms) {
   if (ms === null || ms === undefined) return '-';
   return Math.round(ms) + 'ms';
 }
-
 function fmtTime(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
   return d.toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+function getColor(key) {
+  const m = {
+    'deepseek-v4-pro': '#3b82f6', 'deepseek-v4-flash': '#60a5fa',
+    'doubao-seed-2-0-pro': '#06b6d4', 'doubao-seed-2-0-lite': '#67e8f9',
+    'MiniMax-M2.7-highspeed': '#22c55e', 'mimo-v2.5-pro': '#f59e0b',
+    'mimo-v2.5': '#f87171', 'LongCat-Flash-Lite': '#a855f7',
+    'LongCat-2.0-Preview': '#c084fc', 'LongCat-Flash-Chat': '#fbbf24',
+    'glm-5-1': '#60a5fa', 'kimi-for-coding': '#ec4899',
+  };
+  return m[key] || '#64748b';
 }
 
 async function fetchJSON(url) {
@@ -213,28 +265,24 @@ async function fetchJSON(url) {
   return r.json();
 }
 
-let dailyChartInstance = null;
-let tokenChartInstance = null;
-
+// ─── Stats ───
 async function loadStats() {
   const [totals, summary] = await Promise.all([
     fetchJSON('/api/stats/totals'),
     fetchJSON('/api/stats/summary')
   ]);
-
   const t = totals.data || {};
   document.getElementById('totalReqs').textContent = fmt(t.total_requests || 0);
   document.getElementById('totalPrompt').textContent = fmt(t.total_prompt_tokens || 0);
   document.getElementById('totalComp').textContent = fmt(t.total_completion_tokens || 0);
   document.getElementById('totalCached').textContent = fmt(t.total_cached_tokens || 0);
 
-  // Model table
   const tbody = document.getElementById('modelTable');
   tbody.innerHTML = '';
   const rows = summary.data || [];
   for (const r of rows) {
-    const channelClass = r.grp_channel || r.channel || '';
-    const chBadge = channelClass ? `<span class="badge ${channelClass}">${channelClass}</span>` : '-';
+    const ch = r.grp_channel || r.channel || '';
+    const chBadge = ch ? `<span class="badge ${ch}">${ch}</span>` : '-';
     const model = r.grp_model || r.grp || r.model || '-';
     tbody.innerHTML += `<tr>
       <td class="mono">${model}</td>
@@ -248,27 +296,28 @@ async function loadStats() {
   }
 }
 
-async function loadDaily(days = 7) {
-  let labels, dataMap, modelSet = new Set();
+// ─── Daily bar chart (CSS) ───
+let dailyDays = 7;
+async function loadDaily(days) {
+  dailyDays = days;
+  const container = document.getElementById('dailyBars');
+  container.innerHTML = '<div class="loading">加载中...</div>';
 
+  let labels, dataMap, modelSet = new Set();
   if (days === 1) {
-    // 今天：按小时展示
-    const resp = await fetchJSON('/api/stats/hourly');
+    const resp = await fetchJSON('/api/stats/hourly?role_filter=request');
     const rows = resp.data || [];
-    labels = Array.from({length: 24}, (_, i) => String(i).padStart(2, '0') + ':00');
+    labels = Array.from({length: 24}, (_, i) => String(i).padStart(2, '0') + '时');
     dataMap = {};
     for (const r of rows) {
       modelSet.add(r.model);
       if (!dataMap[r.hour]) dataMap[r.hour] = {};
       dataMap[r.hour][r.model] = r.request_count;
     }
-    var getVal = (m, i) => dataMap[i]?.[m] || 0;
-    var xLabels = labels;
     var xKeys = Array.from({length: 24}, (_, i) => i);
   } else {
-    // 多天：按日期展示
     const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
-    const resp = await fetchJSON('/api/stats/daily?since=' + since);
+    const resp = await fetchJSON('/api/stats/daily?since=' + since + '&role_filter=request');
     const rows = resp.data || [];
     const allDates = [];
     for (let i = days - 1; i >= 0; i--) {
@@ -280,205 +329,205 @@ async function loadDaily(days = 7) {
       if (!dataMap[r.date]) dataMap[r.date] = {};
       dataMap[r.date][r.model] = r.request_count;
     }
-    var getVal = (m, d) => dataMap[d]?.[m] || 0;
-    var xLabels = allDates;
+    labels = allDates.map(d => d.slice(5));
     var xKeys = allDates;
   }
 
   const models = [...modelSet];
-  const datasets = models.map(m => ({
-    label: m,
-    data: xKeys.map(k => getVal(m, k)),
-    borderColor: getColor(m),
-    backgroundColor: getColor(m) + '99',
-    fill: true,
-    tension: 0.3,
-    pointRadius: 3,
-    pointHoverRadius: 5,
-  }));
-
-  if (dailyChartInstance) dailyChartInstance.destroy();
-  dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
-    type: 'line',
-    data: { labels: xLabels, datasets },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
-      scales: {
-        x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
-        y: {
-          stacked: true,
-          beginAtZero: true,
-          ticks: { color: '#94a3b8', font: { size: 10 } },
-          grid: { color: '#1e293b' }
-        }
-      }
+  // 对每个 xKey (日期/小时)，堆叠所有模型的请求数
+  const stacked = xKeys.map(k => {
+    let total = 0;
+    const parts = [];
+    for (const m of models) {
+      const v = dataMap[k]?.[m] || 0;
+      if (v > 0) { parts.push({model: m, value: v}); total += v; }
     }
+    return {key: k, total, parts};
   });
+
+  const maxTotal = Math.max(...stacked.map(s => s.total), 1);
+
+  // 计算每个模型的总请求数
+  const modelTotals = {};
+  for (const m of models) {
+    modelTotals[m] = stacked.reduce((sum, s) => {
+      const p = s.parts.find(x => x.model === m);
+      return sum + (p ? p.value : 0);
+    }, 0);
+  }
+
+  let html = '';
+  for (const s of stacked) {
+    if (s.total === 0) continue;
+    const pct = (s.total / maxTotal * 100).toFixed(1);
+    html += `<div class="bar-group">
+      <div class="bar-label">
+        <span class="name">${labels[xKeys.indexOf(s.key)] || s.key}</span>
+        <span class="val">${s.total}</span>
+      </div>
+      <div class="bar-track" style="position:relative;overflow:visible;">`;
+    let left = 0;
+    for (const p of s.parts) {
+      const w = (p.value / maxTotal * 100).toFixed(1);
+      html += `<div class="bar-fill" style="position:absolute;left:${left}%;width:${w}%;background:${getColor(p.model)};" title="${p.model}: ${p.value}"></div>`;
+      left += parseFloat(w);
+    }
+    html += `</div></div>`;
+  }
+
+  // 图例：模型名 + 颜色 + 总请求数
+  const legendHTML = models
+    .filter(m => modelTotals[m] > 0)
+    .sort((a, b) => modelTotals[b] - modelTotals[a])
+    .map(m => `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:11px;color:var(--muted);">
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${getColor(m)};"></span>
+      ${m} <span style="color:var(--text);font-weight:600;">${modelTotals[m]}</span>
+    </span>`).join('');
+
+  if (!html) html = '<div class="loading">暂无数据</div>';
+  container.innerHTML = html + (legendHTML ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">${legendHTML}</div>` : '');
 }
 
-// 天数切换按钮事件
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('.day-btn:not(.token-btn)').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.day-btn:not(.token-btn)').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      loadDaily(parseInt(btn.dataset.days));
-    });
-  });
-  document.querySelectorAll('.token-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.token-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      loadTokenChart(parseInt(btn.dataset.days));
-    });
-  });
-});
-
-async function loadTokenChart(days = 7) {
+// ─── Token bar chart (CSS) ───
+async function loadTokenChart(days) {
   const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
   const resp = await fetchJSON('/api/stats/summary?group_by=model&since=' + since);
   const rows = resp.data || [];
-
-  const labels = rows.map(r => r.grp_model || r.grp || r.model || '-');
-  const cachedData    = rows.map(r => r.total_cached_tokens || 0);
-  const nonCachedData = rows.map(r => Math.max(0, (r.total_prompt_tokens || 0) - (r.total_cached_tokens || 0)));
-  const compData      = rows.map(r => r.total_completion_tokens || 0);
-
-  if (tokenChartInstance) tokenChartInstance.destroy();
-  tokenChartInstance = new Chart(document.getElementById('tokenChart'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: '缓存命中', data: cachedData, backgroundColor: '#a855f7', borderRadius: 3, stack: 'input' },
-        { label: '输入(未命中)', data: nonCachedData, backgroundColor: '#22c55e', borderRadius: 3, stack: 'input' },
-        { label: '输出', data: compData, backgroundColor: '#f59e0b', borderRadius: 3, stack: 'output' },
-      ]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
-      scales: {
-        x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
-        y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } }
-      }
-    }
-  });
-}
-
-async function loadLogs() {
-  const resp = await fetchJSON('/api/stats/logs?limit=20');
-  const rows = resp.data || [];
-  const container = document.getElementById('logsList');
+  const container = document.getElementById('tokenBars');
   container.innerHTML = '';
+
+  const maxTokens = Math.max(...rows.map(r => (r.total_prompt_tokens || 0) + (r.total_completion_tokens || 0)), 1);
+
   for (const r of rows) {
-    const ch = r.channel || '';
-    container.innerHTML += `<div class="log-row">
-      <span style="color:var(--muted)">${fmtTime(r.timestamp)}</span>
-      <span class="mono">${r.model}</span>
-      <span><span class="badge ${ch}">${ch}</span></span>
-      <span class="mono">${fmt(r.prompt_tokens)}</span>
-      <span class="mono">${fmt(r.completion_tokens)}</span>
-      <span class="mono">${fmt(r.cached_tokens)}</span>
-      <span class="mono">${fmtMs(r.latency_ms)}</span>
+    const model = r.grp_model || r.grp || r.model || '-';
+    const cached = r.total_cached_tokens || 0;
+    const nonCached = Math.max(0, (r.total_prompt_tokens || 0) - cached);
+    const comp = r.total_completion_tokens || 0;
+    const total = cached + nonCached + comp;
+    if (total === 0) continue;
+
+    const wCached = (cached / maxTokens * 100).toFixed(1);
+    const wNonCached = (nonCached / maxTokens * 100).toFixed(1);
+    const wComp = (comp / maxTokens * 100).toFixed(1);
+    const wTotal = (total / maxTokens * 100).toFixed(1);
+
+    container.innerHTML += `<div class="bar-group">
+      <div class="bar-label">
+        <span class="name" title="${model}">${model}</span>
+        <span class="val">${fmt(total)}</span>
+      </div>
+      <div class="bar-track" style="height:12px;">
+        <div class="bar-fill" style="width:${wTotal}%;background:var(--border);position:relative;">
+          <div class="bar-fill" style="width:${(cached/total*100).toFixed(1)}%;background:#a855f7;position:absolute;left:0;top:0;bottom:0;"></div>
+          <div class="bar-fill" style="width:${(nonCached/total*100).toFixed(1)}%;background:#22c55e;position:absolute;left:${(cached/total*100).toFixed(1)}%;top:0;bottom:0;"></div>
+          <div class="bar-fill" style="width:${(comp/total*100).toFixed(1)}%;background:#f59e0b;position:absolute;left:${((cached+nonCached)/total*100).toFixed(1)}%;top:0;bottom:0;"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:12px;margin-top:2px;font-size:10px;color:var(--muted);">
+        <span>🟣 缓存 ${fmt(cached)}</span>
+        <span>🟢 输入 ${fmt(nonCached)}</span>
+        <span>🟡 输出 ${fmt(comp)}</span>
+      </div>
     </div>`;
   }
+  if (!container.innerHTML) container.innerHTML = '<div class="loading">暂无数据</div>';
 }
 
-let routerChartInstance = null;
-
-async function loadRouterChart() {
-  const resp = await fetchJSON('/api/stats/classifier');
+// ─── Logs ───
+async function loadLogs() {
+  const resp = await fetchJSON('/api/stats/logs?limit=15');
   const rows = resp.data || [];
-  const labels = rows.map(r => r.grp);
-  const counts = rows.map(r => r.request_count);
-  const colors = labels.map(m => getColor(m));
+  const container = document.getElementById('logsList');
+  if (!rows.length) { container.innerHTML = '<div class="loading">暂无数据</div>'; return; }
 
-  if (routerChartInstance) routerChartInstance.destroy();
-  routerChartInstance = new Chart(document.getElementById('modelReqChart'), {
-    type: 'doughnut',
-    data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 2, borderColor: '#1e293b' }] },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } }
-    }
-  });
+  // 表头
+  const headerHTML = `<div style="display:grid;grid-template-columns:18% 24% 10% 14% 14% 20%;gap:4px;padding:6px 10px 8px;border-bottom:2px solid var(--border);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">
+    <span>时间</span>
+    <span>模型</span>
+    <span>渠道</span>
+    <span style="text-align:right;">输入</span>
+    <span style="text-align:right;">输出</span>
+    <span style="text-align:right;">延迟</span>
+  </div>`;
+
+  // 数据行
+  const rowsHTML = rows.map(r => {
+    const ch = r.channel || '';
+    return `<div style="display:grid;grid-template-columns:18% 24% 10% 14% 14% 20%;gap:4px;padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;">
+      <span style="color:var(--muted)">${fmtTime(r.timestamp)}</span>
+      <span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.model || ''}">${r.model || '-'}</span>
+      <span class="badge ${ch}" style="display:inline-block;width:fit-content;">${ch}</span>
+      <span class="mono" style="text-align:right;">${fmt(r.prompt_tokens)}</span>
+      <span class="mono" style="text-align:right;">${fmt(r.completion_tokens)}</span>
+      <span class="mono" style="text-align:right;">${fmtMs(r.latency_ms)}</span>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = headerHTML + rowsHTML;
 }
 
+// ─── Model config (card grid) ───
 function getApiKey() {
   return localStorage.getItem('llm_gateway_api_key') || 'V.A.L.O.R.';
 }
 
-// 标签页切换
-function switchTab(name) {
-  document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
-  if (name === 'config') loadProviders();
+// Provider brand colors
+const PROVIDER_COLORS = {
+  ark:      { bg: '#1e3a5f', fg: '#60a5fa' },
+  minimax:  { bg: '#1a3d2e', fg: '#4ade80' },
+  longcat:  { bg: '#2d2a1a', fg: '#fbbf24' },
+  xiaomi:   { bg: '#3d1a1a', fg: '#f87171' },
+  deepseek: { bg: '#1a2e3d', fg: '#38bdf8' },
+  kimi:     { bg: '#3b1f4a', fg: '#c084fc' },
+  aliyuncs: { bg: '#2a1a3d', fg: '#e879f9' },
+};
+const DEFAULT_COLOR = { bg: '#1e293b', fg: '#94a3b8' };
+
+function providerColor(name) {
+  return PROVIDER_COLORS[name] || DEFAULT_COLOR;
 }
 
-// 加载 Provider 及其下属 Model 列表
-async function loadProviders() {
-  const [pr, mr] = await Promise.all([
-    fetch('/api/config/providers').then(r => r.json()),
-    fetch('/api/config/models').then(r => r.json()),
-  ]);
-  const providers = pr.data || [];
-  const modelsByProvider = mr.data || {};
-  const tbody = document.getElementById('providers-table-body');
-  tbody.innerHTML = '';
-  const stateLabel = {'enabled':'运行中','draining':'关闭中','disabled':'已关闭'};
-  const stateColor = {'enabled':'var(--green)','draining':'var(--amber)','disabled':'var(--red)'};
-  for (const p of providers) {
-    const pLabel = stateLabel[p.state] || p.state;
-    const pColor = stateColor[p.state];
-    const pBtnLabel = p.enabled ? '关闭' : '开启';
-    const pBtnColor = p.enabled ? 'var(--red)' : 'var(--green)';
-    tbody.innerHTML += `<tr style="background:var(--card)">
-      <td colspan="2" style="font-weight:600;padding:10px 12px">
-        <span style="color:var(--accent)">Provider: ${p.name}</span>
-        <span style="color:${pColor};margin-left:12px;font-size:12px">${pLabel}</span>
-        ${p.active_requests > 0 ? `<span style="color:var(--muted);margin-left:8px;font-size:11px">${p.active_requests} 活跃</span>` : ''}
-      </td>
-      <td style="padding:10px 12px">
-        <button onclick="toggleProvider('${p.name}',${!p.enabled})"
-          style="background:${pBtnColor};color:#fff;border:none;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:12px">
-          ${pBtnLabel}</button>
-      </td>
-    </tr>`;
-    const models = modelsByProvider[p.name] || [];
+async function loadModels() {
+  const container = document.getElementById('configCards');
+  container.innerHTML = '<div class="loading" style="padding:40px;text-align:center">加载中...</div>';
+  const resp = await fetch('/api/config/models');
+  if (!resp.ok) { container.innerHTML = '<div class="loading">加载失败</div>'; return; }
+  const data = await resp.json();
+  const modelsByProvider = data.data || {};
+  const entries = Object.entries(modelsByProvider);
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="loading">暂无数据</div>'; return;
+  }
+  container.innerHTML = '';
+  for (const [provider, models] of entries) {
+    const enabled = models.filter(m => m.enabled).length;
+    const total = models.length;
+    const badgeClass = enabled === total ? 'ok' : 'warn';
+    const badgeLabel = `${enabled}/${total} 启用`;
+    const color = providerColor(provider);
+    let modelsHTML = '';
     for (const m of models) {
-      const mBtnLabel = m.enabled ? '关闭' : '开启';
-      const mBtnColor = m.enabled ? 'var(--red)' : 'var(--green)';
-      const mDisabled = !p.enabled ? 'opacity:0.4;pointer-events:none' : '';
-      tbody.innerHTML += `<tr style="${mDisabled}">
-        <td style="padding:6px 12px 6px 28px;color:var(--muted);font-size:12px">└─</td>
-        <td class="mono" style="font-size:13px">${m.name}</td>
-        <td style="padding:6px 12px">
-          <button onclick="toggleModel('${m.name}',${!m.enabled})"
-            style="background:${mBtnColor};color:#fff;border:none;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px">
-            ${mBtnLabel}</button>
-        </td>
-      </tr>`;
+      const dotClass = m.enabled ? 'on' : 'off';
+      const btnLabel = m.enabled ? '关闭' : '开启';
+      const btnColor = m.enabled ? 'var(--red)' : 'var(--green)';
+      modelsHTML += `<div class="config-model-row">
+        <div class="config-model-info">
+          <span class="config-status-dot ${dotClass}"></span>
+          <span class="config-model-name" title="${m.name}">${m.name}</span>
+        </div>
+        <button class="toggle-btn" style="background:${btnColor}" onclick="toggleModel('${m.name.replace(/'/g,"\\'")}',${!m.enabled})">${btnLabel}</button>
+      </div>`;
     }
+    container.innerHTML += `<div class="config-card">
+      <div class="config-card-header">
+        <span class="config-card-provider" style="color:${color.fg}">${provider}</span>
+        <span class="config-card-badge ${badgeClass}">${badgeLabel}</span>
+      </div>
+      <div class="config-card-models">${modelsHTML}</div>
+    </div>`;
   }
 }
 
-// 切换 Provider 开关
-async function toggleProvider(name, enable) {
-  const apiKey = getApiKey();
-  const r = await fetch(`/api/config/providers/${name}`, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${apiKey}`},
-    body: JSON.stringify({enabled: enable})
-  });
-  if (!r.ok) { alert('操作失败'); return; }
-  await loadProviders();
-}
-
-// 切换 Model 开关
 async function toggleModel(name, enable) {
   const r = await fetch(`/api/config/models/${encodeURIComponent(name)}`, {
     method: 'POST',
@@ -486,16 +535,41 @@ async function toggleModel(name, enable) {
     body: JSON.stringify({enabled: enable})
   });
   if (!r.ok) { alert('操作失败'); return; }
-  await loadProviders();
+  await loadModels();
 }
+
+// ─── Tab switch ───
+function switchTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
+  if (name === 'config') loadModels();
+}
+
+// ─── Day button events ───
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('#dailyBtns .day-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#dailyBtns .day-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadDaily(parseInt(btn.dataset.days));
+    });
+  });
+  document.querySelectorAll('#tokenBtns .day-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#tokenBtns .day-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadTokenChart(parseInt(btn.dataset.days));
+    });
+  });
+});
 
 async function loadAll() {
   document.getElementById('totalReqs').textContent = '...';
   try {
-    await Promise.all([loadStats(), loadDaily(7), loadTokenChart(7), loadLogs(), loadRouterChart()]);
-  } catch(e) {
-    console.error(e);
-  }
+    await Promise.all([loadStats(), loadDaily(7), loadTokenChart(7), loadLogs(), loadModels()]);
+  } catch(e) { console.error(e); }
 }
 
 loadAll();

@@ -1,4 +1,5 @@
 import json as _json
+import logging
 import time
 from typing import Callable, Optional
 
@@ -8,8 +9,11 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from providers import ProviderConfig, get_channel_for_model
 from usage import get_usage_db
 
-# connect timeout 10s, read timeout 120s (balance fast-fail with long streaming)
-_TIMEOUT = httpx.Timeout(10.0, read=120.0)
+# connect timeout 10s
+# 流式响应需要更长的 read timeout（SSE 保持连接）
+# 非流式响应可以短一些，快速失败
+_TIMEOUT_STREAM = httpx.Timeout(10.0, read=300.0)
+_TIMEOUT_JSON = httpx.Timeout(10.0, read=120.0)
 # 全局连接池：每 host 最多 100 个连接，空闲连接 30s 后回收
 # 重连时复用已有连接，消除新建 TCP+TLS 握手开销
 _LIMITS = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
@@ -20,23 +24,36 @@ def get_client() -> httpx.AsyncClient:
     """返回全局共享的 httpx 客户端（延迟创建，确保在 async 上下文中调用）。"""
     global _CLIENT
     if _CLIENT is None:
-        _CLIENT = httpx.AsyncClient(timeout=_TIMEOUT, limits=_LIMITS)
+        _CLIENT = httpx.AsyncClient(timeout=_TIMEOUT_JSON, limits=_LIMITS)
     return _CLIENT
 
 
 def build_forwarded_request(original: dict, target_model: str) -> dict:
     """Replace model and apply per-model thinking-disable and other adjustments."""
-    payload = {**original, "model": target_model}
+    # 模型名映射：gateway 路由名 -> 实际 API 名
+    _model_name_map = {
+        "deepseek-v4-flash-aliyun": "deepseek-v4-flash",
+    }
+    payload = {**original, "model": _model_name_map.get(target_model, target_model)}
     if target_model.startswith("doubao"):
         payload.setdefault("reasoning_effort", "minimal")
     elif target_model.startswith("glm") or get_channel_for_model(target_model) == "kimi":
         payload.setdefault("thinking", {"type": "disabled"})
-    elif get_channel_for_model(target_model) == "deepseek":
-        payload.setdefault("thinking", {"type": "disabled"})
+    elif target_model.startswith("deepseek") or target_model == "deepseek-v4-flash-aliyun":
+        # deepseek 模型需要 thinking disabled，不管属于哪个 channel
+        if get_channel_for_model(target_model) == "aliyuncs":
+            # 百炼用 enable_thinking 参数（通过 extra_body）
+            extra_body = payload.setdefault("extra_body", {})
+            extra_body["enable_thinking"] = False
+        else:
+            payload.setdefault("thinking", {"type": "disabled"})
         payload.pop("reasoning_effort", None)
     elif get_channel_for_model(target_model) == "xiaomi":
         payload.setdefault("thinking", {"type": "disabled"})
         payload.pop("reasoning_effort", None)
+    elif get_channel_for_model(target_model) == "longcat":
+        payload.pop("reasoning_effort", None)
+        payload.pop("thinking", None)
     elif get_channel_for_model(target_model) == "minimax":
         # MiniMax: no thinking-disable param; ensure budget isn't exhausted before content
         if payload.get("max_tokens", 8192) < 8192:
@@ -130,17 +147,20 @@ async def _stream_response(
         final_status = 200
         try:
             client = get_client()
+            # 流式请求需要更长的 read timeout
             async with client.stream(
                 "POST",
                 f"{provider.base_url}/chat/completions",
                 headers=provider.get_headers(),
                 json=payload,
+                timeout=_TIMEOUT_STREAM,
             ) as resp:
                 if resp.status_code >= 400:
                     final_status = resp.status_code
                     body_bytes = await resp.aread()
                     if on_error is not None:
                         await on_error(resp.status_code, body_bytes.decode(errors="replace"))
+                    logging.warning(f"PROXY stream upstream {resp.status_code}: model={target_model} channel={channel} body={body_bytes[:300]}")
                     err = _json.dumps({"error": "upstream error", "status": resp.status_code})
                     yield f"data: {err}\n\n".encode()
                     return

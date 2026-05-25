@@ -128,6 +128,20 @@ class UsageDB:
             until = datetime.now(CST).isoformat()
 
         with self._conn() as conn:
+            # role_filter 处理：
+            #   None 或 "request" → 排除 classifier
+            #   "classifier" → 只看 classifier
+            #   其他 → 精确匹配
+            if role_filter is None or role_filter == "request":
+                role_clause = "AND (role IS NULL OR role != 'classifier')"
+                params: tuple = (since, until)
+            elif role_filter == "classifier":
+                role_clause = "AND role = 'classifier'"
+                params = (since, until)
+            else:
+                role_clause = "AND role = ?"
+                params = (since, until, role_filter)
+
             rows = conn.execute(
                 f"""
                 SELECT
@@ -140,12 +154,11 @@ class UsageDB:
                     AVG(latency_ms) as avg_latency_ms
                 FROM usage_logs
                 WHERE timestamp >= ? AND timestamp <= ?
-                  AND CASE WHEN ? IS NULL THEN (role IS NULL OR role != 'classifier')
-                           ELSE role = ? END
+                {role_clause}
                 GROUP BY {group_by}, channel
                 ORDER BY request_count DESC
                 """,
-                (since, until, role_filter, role_filter),
+                params,
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -153,6 +166,7 @@ class UsageDB:
         self,
         since: Optional[str] = None,
         until: Optional[str] = None,
+        role_filter: Optional[str] = None,
     ) -> list[dict]:
         """Get daily usage breakdown across all models."""
         if since is None:
@@ -160,9 +174,20 @@ class UsageDB:
         if until is None:
             until = datetime.now(CST).isoformat()
 
+        # role_filter 处理：None 或 'request' → 排除 classifier；'classifier' → 只看 classifier
+        if role_filter is None or role_filter == "request":
+            role_clause = "AND (role IS NULL OR role != 'classifier')"
+            params: tuple = (since, until)
+        elif role_filter == "classifier":
+            role_clause = "AND role = 'classifier'"
+            params = (since, until)
+        else:
+            role_clause = "AND role = ?"
+            params = (since, until, role_filter)
+
         with self._conn() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                     DATE(timestamp) as date,
                     model,
@@ -173,22 +198,34 @@ class UsageDB:
                     SUM(cached_tokens) as total_cached_tokens
                 FROM usage_logs
                 WHERE timestamp >= ? AND timestamp <= ?
+                {role_clause}
                 GROUP BY DATE(timestamp), model
                 ORDER BY date DESC, request_count DESC
                 """,
-                (since, until),
+                params,
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def get_hourly(self, date: Optional[str] = None) -> list[dict]:
+    def get_hourly(self, date: Optional[str] = None, role_filter: Optional[str] = None) -> list[dict]:
         """Get hourly usage breakdown for a given date (default: today)."""
         if date is None:
             date = datetime.now(CST).strftime("%Y-%m-%d")
         since = f"{date}T00:00:00"
         until = f"{date}T23:59:59"
+
+        if role_filter is None or role_filter == "request":
+            role_clause = "AND (role IS NULL OR role != 'classifier')"
+            params: tuple = (since, until)
+        elif role_filter == "classifier":
+            role_clause = "AND role = 'classifier'"
+            params = (since, until)
+        else:
+            role_clause = "AND role = ?"
+            params = (since, until, role_filter)
+
         with self._conn() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                     CAST(strftime('%H', datetime(timestamp, '+8 hours')) AS INTEGER) as hour,
                     model,
@@ -198,10 +235,11 @@ class UsageDB:
                     SUM(completion_tokens) as total_completion_tokens
                 FROM usage_logs
                 WHERE timestamp >= ? AND timestamp <= ?
+                {role_clause}
                 GROUP BY hour, model
                 ORDER BY hour ASC, request_count DESC
                 """,
-                (since, until),
+                params,
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -248,7 +286,7 @@ class UsageDB:
             return [dict(r) for r in rows]
 
     def get_total_stats(self) -> dict:
-        """Get overall lifetime stats."""
+        """Get overall lifetime stats (excluding classifier requests)."""
         with self._conn() as conn:
             row = conn.execute(
                 """
@@ -258,6 +296,7 @@ class UsageDB:
                     SUM(completion_tokens) as total_completion_tokens,
                     SUM(cached_tokens) as total_cached_tokens
                 FROM usage_logs
+                WHERE role != 'classifier'
                 """
             ).fetchone()
             return dict(row) if row else {}

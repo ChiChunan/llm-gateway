@@ -24,25 +24,25 @@ class ProviderConfig:
 
 # Model name -> channel identifier
 MODEL_TO_CHANNEL: dict[str, str] = {
-    "ark-code-latest": "ark",
     "doubao-seed-2-0-lite": "ark",
     "doubao-seed-2-0-pro": "ark",
-    "glm-5-1": "ark",
-    "kimi-for-coding": "kimi",
+    "deepseek-v4-pro": "ark",
+    "deepseek-v4-flash": "ark",
     "MiniMax-M2.7-highspeed": "minimax",
-    "deepseek-v4-pro": "deepseek",
-    "deepseek-v4-flash": "deepseek",
     "mimo-v2.5-pro": "xiaomi",
     "mimo-v2.5": "xiaomi",
+    "LongCat-2.0-Preview": "longcat",
+    "deepseek-v4-flash-aliyun": "aliyuncs",
+    "deepseek-v4-flash": "ark",
 }
 
 # Channel -> default model (for /v1/models listing)
 CHANNEL_TO_DEFAULT_MODEL: dict[str, str] = {
-    "ark": "doubao-seed-2-0-pro",
-    "kimi": "kimi-for-coding",
+    "ark": "deepseek-v4-pro",
     "minimax": "MiniMax-M2.7-highspeed",
-    "deepseek": "deepseek-v4-pro",
     "xiaomi": "mimo-v2.5-pro",
+    "longcat": "LongCat-2.0-Preview",
+    "aliyuncs": "deepseek-v4-flash-aliyun",
 }
 
 
@@ -98,6 +98,24 @@ def init_providers() -> dict[str, ProviderConfig]:
             base_url=mimo_base,
             api_key=mimo_key,
             auth_header="api-key",
+        )
+
+    # LongCat
+    longcat_key = os.environ.get("LONGCAT_API_KEY", "")
+    longcat_base = os.environ.get("LONGCAT_BASE_URL", "https://api.longcat.chat/openai")
+    if longcat_key:
+        providers["longcat"] = ProviderConfig(
+            base_url=longcat_base,
+            api_key=longcat_key,
+        )
+
+    # DashScope (阿里云百炼)
+    dashscope_key = os.environ.get("ALIYUNCS_API_KEY", "")
+    dashscope_base = os.environ.get("ALIYUNCS_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    if dashscope_key:
+        providers["aliyuncs"] = ProviderConfig(
+            base_url=dashscope_base,
+            api_key=dashscope_key,
         )
 
     return providers

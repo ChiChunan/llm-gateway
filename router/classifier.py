@@ -9,35 +9,63 @@ import httpx
 CLASSIFY_PROMPT = """\
 你是一个任务分类器。不要推理，直接分类。
 
-coordinator（满足任意一条）：
+complex（满足任意一条即为复杂任务）：
 - 中等及以上规模的任务，涉及多步骤、多模块或较长链路（如开发系统、搭建平台、实现完整功能模块）
 - 规划、拆解、制定方案、分配工作、协调多个子任务
-- 跨文件/跨模块的分析、review、验证（单文件分析归 executor）
-- 需求澄清、目标确认、边界梳理
+- 跨文件/跨模块的分析、review、验证（单文件分析归 simple）
+- 需求澄清、目标确认、边界梳理、架构设计
 - 适合多 Agent 并行处理的任务
 - 子 Agent 结果回收、分析汇总、下一步行动规划
 
-writer（同时满足）：
-- 写作、文档、总结、解释、翻译，或日常交流、闲聊、通识问答
-- 不涉及系统/功能开发，不涉及代码实现
-
-executor（以下情况）：
+simple（除 complex 以外的所有任务）：
+- 写作、文档、总结、解释、翻译
+- 日常交流、闲聊、通识问答
 - 明确的单步代码任务（写一个函数、修一个 bug、实现一个接口）
 - 单文件的分析、检查、review
 - 工具调用、命令执行、文件读写等单一操作
-- 无法归入以上两类
+- 无法归入 complex 的其他任务
 
 只返回 JSON：
-{{"role": "coordinator"}} 或 {{"role": "writer"}} 或 {{"role": "executor"}}
+{{"role": "complex"}} 或 {{"role": "simple"}}
 
+{context}
 用户请求：
 {content} 不要思考，直接给结果"""
 
+CLASSIFY_PROMPT_CONTEXTED = """\
+你是一个任务分类器。不要推理，直接分类。
+
+complex（满足任意一条即为复杂任务）：
+- 中等及以上规模的任务，涉及多步骤、多模块或较长链路（如开发系统、搭建平台、实现完整功能模块）
+- 规划、拆解、制定方案、分配工作、协调多个子任务
+- 跨文件/跨模块的分析、review、验证（单文件分析归 simple）
+- 需求澄清、目标确认、边界梳理、架构设计
+- 适合多 Agent 并行处理的任务
+- 子 Agent 结果回收、分析汇总、下一步行动规划
+
+simple（除 complex 以外的所有任务）：
+- 写作、文档、总结、解释、翻译
+- 日常交流、闲聊、通识问答
+- 明确的单步代码任务（写一个函数、修一个 bug、实现一个接口）
+- 单文件的分析、检查、review
+- 工具调用、命令执行、文件读写等单一操作
+- 无法归入 complex 的其他任务
+
+只返回 JSON：
+{{"role": "complex"}} 或 {{"role": "simple"}}
+
+历史对话摘要（供上下文参考，不是需要分类的内容）：
+{context}
+
+当前需要分类的用户请求：
+{content}
+
+不要思考，直接给结果"""
+
 
 class Complexity(str, Enum):
-    COORDINATOR = "coordinator"
-    WRITER = "writer"
-    EXECUTOR = "executor"
+    COMPLEX = "complex"
+    SIMPLE = "simple"
 
 
 @dataclass
@@ -49,8 +77,11 @@ class ClassifyResult:
     latency_ms: int
 
 
-_COORDINATOR_KEYWORDS = [
-    # 规划/拆解
+# 移除了 WRITER 关键字列表（writer + executor 合并为 simple）
+# 移除了 EXECUTOR 关键字列表
+# 只保留 COORDINATOR -> COMPLEX 的判断，其余全部归 SIMPLE
+_COMPLEX_KEYWORDS = [
+    # 规划/拆解/方案
     "规划", "拆解", "方案", "计划", "设计", "架构",
     # 分析/检查/验证
     "分析", "检查", "验证", "review", "审查", "审计", "评估",
@@ -62,30 +93,19 @@ _COORDINATOR_KEYWORDS = [
     "汇总", "整合", "梳理",
 ]
 
-# 移除 "kimi" 关键字：用户提及模型名不等于需要复杂模型
-# 注意：COORDINATOR 和 WRITER 关键字有重叠时，优先 WRITER（因为先检查 WRITER）
-_WRITER_KEYWORDS = [
-    # 写作/文档
-    "写", "写作", "文档", "文章", "博客", "报告", "总结", "概括", "摘要",
-    # 翻译
-    "翻译", "译成", "译为",
-]
-
 
 def keyword_classify(text: str) -> ClassifyResult:
-    """ark 不可用时的关键字降级分类。优先级：COORDINATOR > WRITER > EXECUTOR。"""
+    """simple 不可用时的关键字降级分类。complex 有关键字则 complex，否则 simple。"""
     lower = text.lower()
-    if any(kw in lower for kw in _COORDINATOR_KEYWORDS):
-        complexity = Complexity.COORDINATOR
-    elif any(kw in lower for kw in _WRITER_KEYWORDS):
-        complexity = Complexity.WRITER
+    if any(kw in lower for kw in _COMPLEX_KEYWORDS):
+        complexity = Complexity.COMPLEX
     else:
-        complexity = Complexity.EXECUTOR
+        complexity = Complexity.SIMPLE
     return ClassifyResult(complexity=complexity, model="keyword", prompt_tokens=0, completion_tokens=0, latency_ms=0)
 
 
 class Classifier:
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 10.0, extra_body: dict | None = None):
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 15.0, extra_body: dict | None = None):
         self._base_url = base_url
         self._api_key = api_key
         self._model = model
@@ -104,21 +124,73 @@ class Classifier:
             content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
         return str(content)[:1000]
 
-    async def _call_llm(self, content: str, on_429=None) -> tuple[str, dict, int]:
-        """返回 (content, usage, latency_ms)"""
-        prompt = CLASSIFY_PROMPT.format(content=content)
+    def extract_context_for_classify(self, messages: list[dict], max_context_chars: int = 3000) -> tuple[str, str]:
+        """从 messages 中提取 (历史摘要, 最后一条user消息)，用于带上下文的分类。
+
+        设计原则：
+        - last_message 优先保证完整性（前 2000 字符），分类器需要看到当前请求的完整内容
+        - context 历史只取摘要，最多取最近 5 条，控制在 max_context_chars 以内
+        """
+        # 1. 找到最后一条 user 消息（当前请求），优先保证它的完整性
+        last_user_idx = -1
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                last_user_idx = i
+                break
+
+        if last_user_idx == -1:
+            return "", ""
+
+        last_msg = messages[last_user_idx]
+        last_content = last_msg.get("content", "")
+        if isinstance(last_content, list):
+            last_content = " ".join(p.get("text", "") for p in last_content if isinstance(p, dict))
+        last_message = str(last_content)[:2000]
+
+        # 2. 提取 last_user_idx 之前的消息做历史摘要（最多 5 条，来自不同轮次）
+        history_msgs = messages[:last_user_idx]
+        summary_lines = []
+        for msg in history_msgs:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+            content = str(content)
+            # 每条历史只保留第一行，最多截 300 字符
+            first_line = content.split("\n")[0][:300]
+            summary_lines.append(f"{role}: {first_line}")
+
+        # 3. 只保留最近 5 条，从后往前
+        summary_lines = summary_lines[-5:]
+
+        # 4. 控制总长度
+        context = "\n".join(summary_lines)
+        if len(context) > max_context_chars:
+            context = context[:max_context_chars] + "\n...(truncated)"
+
+        return context, last_message
+
+    async def _call_llm(self, content: str, context: str = "", on_429=None) -> tuple[str, dict, int]:
+        """返回 (content, usage, latency_ms)。提供了 context 时使用带上下文的 prompt。"""
+        if context:
+            prompt = CLASSIFY_PROMPT_CONTEXTED.format(context=context, content=content)
+        else:
+            prompt = CLASSIFY_PROMPT.format(context="", content=content)
         start = time.monotonic()
+        body = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 30,
+            "temperature": 0,
+            **self._extra_body,
+        }
+        # reasoning_effort 只有 ARK (doubao) 支持，其他 provider 不能传
+        if self._base_url and "ark.cn-beijing.volces.com" in self._base_url:
+            body["reasoning_effort"] = "minimal"
         resp = await self._client.post(
             f"{self._base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self._api_key}"},
-            json={
-                "model": self._model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 20,
-                "temperature": 0,
-                "reasoning_effort": "minimal",
-                **self._extra_body,
-            },
+            json=body,
             timeout=self._timeout,
         )
         latency = int((time.monotonic() - start) * 1000)
@@ -134,10 +206,10 @@ class Classifier:
         usage = data.get("usage", {}) or {}
         return data["choices"][0]["message"]["content"], usage, latency
 
-    async def classify(self, last_user_message: str, on_429=None) -> Optional[ClassifyResult]:
-        """分类成功返回 ClassifyResult，失败返回 None（调用方负责降级）"""
+    async def classify(self, last_user_message: str, context: str = "", on_429=None) -> Optional[ClassifyResult]:
+        """分类成功返回 ClassifyResult，失败返回 None（调用方负责降级）。context 非空时带历史上下文。"""
         try:
-            raw, usage, latency = await self._call_llm(last_user_message, on_429=on_429)
+            raw, usage, latency = await self._call_llm(last_user_message, context=context, on_429=on_429)
             data = json.loads(raw.strip())
             return ClassifyResult(
                 complexity=Complexity(data["role"]),

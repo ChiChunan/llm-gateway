@@ -1,8 +1,12 @@
 import json as _json
 import logging
 import os
+from dotenv import load_dotenv
+load_dotenv()
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+import hashlib
+import random
 
 import httpx
 import yaml
@@ -49,16 +53,22 @@ if not providers:
     raise RuntimeError("No LLM providers configured. Set at least one of: ARK_API_KEY, KIMI_API_KEY, MINIMAX_API_KEY")
 
 # ChannelManager 用 model name 粒度，支持 plan 联动
-# 分类器模型也纳入管理，确保 ark plan 429 时能被联动封禁
-_classifier_models = [m for m in [cfg["routing"].get("classifier")] if m]
+# 分类器模型也纳入管理，确保 plan 429 时能被联动封禁
+_classifier_primary = cfg["routing"].get("classifier_primary", {})
+_classifier_fallback_cfg = cfg["routing"].get("classifier_fallback", {})
+_classifier_models = list(dict.fromkeys([
+    _classifier_primary.get("model"),
+    _classifier_fallback_cfg.get("model"),
+]))
+# 过滤掉空字符串和 None
+_classifier_models = [m for m in _classifier_models if m]
 _all_models = list(dict.fromkeys(
-    _classifier_models
-    + cfg["routing"].get("coordinator_candidates", [])
-    + cfg["routing"].get("writer_candidates", [])
-    + cfg["routing"].get("executor_candidates", [])
-    + cfg["routing"].get("coordinator_fallback", [])
-    + cfg["routing"].get("writer_fallback", [])
-    + cfg["routing"].get("executor_fallback", [])
+    [m for m in _classifier_models if m]
+    + cfg["routing"].get("complex_candidates", [])
+    + cfg["routing"].get("complex_fallback", [])
+    + cfg["routing"].get("simple_candidates", [])
+    + cfg["routing"].get("simple_fallback", [])
+    + cfg["routing"].get("multimodal_candidates", [])  # 加入多模态候选
 ))
 
 channel_mgr = ChannelManager(
@@ -66,31 +76,36 @@ channel_mgr = ChannelManager(
     plans=cfg.get("plans", {}),
 )
 
-# 从配置加载 provider 初始开关状态
-for provider, enabled in cfg.get("provider_switches", {}).items():
-    channel_mgr.set_provider_state(provider, bool(enabled))
+# 从配置加载 model 初始开关状态
 for model, enabled in cfg.get("model_switches", {}).items():
     channel_mgr.set_model_enabled(model, bool(enabled))
 _pstate.set_channel_mgr(channel_mgr, "routing.yaml")
 
 usage_db = init_usage_db()
 
-ark_provider = providers.get("ark")
-if ark_provider:
-    classifier = Classifier(
-        base_url=ark_provider.base_url,
-        api_key=ark_provider.api_key,
-        model=cfg["routing"]["classifier"],
-    )
-else:
-    first_provider = next(iter(providers.values()))
-    classifier = Classifier(
-        base_url=first_provider.base_url,
-        api_key=first_provider.api_key,
-        model=cfg["routing"]["classifier"],
-    )
 
-# ARK 不可用时降级为关键字匹配，不再使用 MiniMax 分类器
+def _make_classifier(primary_cfg: dict) -> Classifier | None:
+    """根据 {provider, model} 配置创建 Classifier 实例。"""
+    if not primary_cfg:
+        return None
+    provider_name = primary_cfg.get("provider", "")
+    model_name = primary_cfg.get("model", "")
+    prov = providers.get(provider_name)
+    if not prov:
+        return None
+    # 百炼的 API 模型名与 gateway 路由名不同，通过 extra_body 传入实际模型名
+    extra_body = {}
+    if provider_name == "aliyuncs":
+        extra_body["model"] = "deepseek-v4-flash"
+    return Classifier(base_url=prov.base_url, api_key=prov.api_key, model=model_name, extra_body=extra_body)
+
+
+classifier_primary = _make_classifier(_classifier_primary)
+classifier_fallback = _make_classifier(_classifier_fallback_cfg)
+
+# 用于分类器不可用判断的字段
+_classifier_primary_model = _classifier_primary.get("model", "") if _classifier_primary else ""
+_classifier_fallback_model = _classifier_fallback_cfg.get("model", "")
 
 
 def _pick_model(candidates: list[str], session_key: str | None = None) -> list[tuple[str, object]]:
@@ -110,9 +125,6 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> list[t
         provider = get_provider_for_model(model, providers)
         if provider is None:
             continue
-        provider_name = get_channel_for_model(model)
-        if not channel_mgr.is_provider_available(provider_name):
-            continue
         if not channel_mgr.is_model_enabled(model):
             continue
         if not channel_mgr.is_available(model):
@@ -124,8 +136,6 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> list[t
 
     # 有 session_key：用 seeded shuffle 打乱列表，同 session 固定顺序，不同 session 均匀随机
     if session_key:
-        import hashlib
-        import random
         seed = int(hashlib.sha256(session_key.encode()).hexdigest(), 16)
         ordered = available[:]
         random.Random(seed).shuffle(ordered)
@@ -144,14 +154,17 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> list[t
 
 
 def _has_image(messages: list[dict]) -> bool:
-    """检测 messages 中是否包含图片内容。"""
+    """检测 messages 中是否包含图片内容。
+
+    只检查结构化的 list 格式 content（多模态消息格式），
+    不做字符串关键词匹配，避免对话历史中提到图片文件名导致误判。
+    """
     for msg in messages:
         content = msg.get("content", "")
-        if not isinstance(content, list):
-            continue
-        for part in content:
-            if isinstance(part, dict) and part.get("type") in ("image_url", "image"):
-                return True
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in ("image_url", "image"):
+                    return True
     return False
 
 
@@ -166,7 +179,6 @@ def _get_session_key(messages: list[dict]) -> str | None:
         content = str(content)
         if content.startswith("User:"):
             content = content[5:].split("\nAssistant:")[0].strip()
-        # 取第一个 user 消息（稳定的 session 标识），不再随轮次改变
         return content[:200] or None
     return None
 
@@ -227,9 +239,8 @@ async def health():
 async def list_models():
     routing = cfg["routing"]
     all_candidates = (
-        routing.get("coordinator_candidates", [])
-        + routing.get("writer_candidates", [])
-        + routing.get("executor_candidates", [])
+        routing.get("complex_candidates", [])
+        + routing.get("simple_candidates", [])
     )
     # fallback candidates 与主候选重叠，不单独列出
     seen = set()
@@ -257,12 +268,6 @@ async def chat_completions(request: Request):
                 status_code=400,
                 content={"error": f"unknown model: {requested_model}"},
             )
-        provider_name = get_channel_for_model(requested_model)
-        if not channel_mgr.is_provider_available(provider_name):
-            return JSONResponse(
-                status_code=503,
-                content={"error": f"provider for {requested_model} is disabled"},
-            )
         if not channel_mgr.is_available(requested_model):
             return JSONResponse(
                 status_code=503,
@@ -273,41 +278,68 @@ async def chat_completions(request: Request):
         session_key = _get_session_key(messages)
         complexity = None
         classify_result = None
+        classifier_model = None  # 初始化，避免有图片时未定义
         # 含图片时跳过分类器，直接路由到多模态候选列表
         if _has_image(messages):
             retry_candidates = _pick_model(routing.get("multimodal_candidates", []), session_key)
         else:
-            last_msg = classifier.extract_last_user_message(messages)
-            classifier_model = cfg["routing"]["classifier"]
-            ark_available = (
-                channel_mgr.is_provider_available("ark")
-                and channel_mgr.is_model_enabled(classifier_model)
-                and channel_mgr.is_available(classifier_model)
-            )
-            if ark_available:
-                classify_result = await classifier.classify(last_msg, on_429=channel_mgr.handle_429)
+            # 提取分类上下文和last_msg用任意classifier实例就行，方法是static的
+            if classifier_primary:
+                history_context, last_msg = classifier_primary.extract_context_for_classify(messages)
+            elif classifier_fallback:
+                history_context, last_msg = classifier_fallback.extract_context_for_classify(messages)
             else:
-                logging.warning(f"classifier skipped: ark unavailable, fallback to keyword")
-                classify_result = None
+                # 没有classifier实例，降级为只提取last_msg
+                last_msg = ""
+                for msg in messages[::-1]:
+                    if msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if isinstance(content, list):
+                            content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+                        last_msg = str(content)[:2000]
+                        break
+                history_context = ""
+            classify_result = None
+
+            # 分类器二级降级：primary (LongCat) → fallback (ARK doubao-lite) → keyword
+            if classifier_primary and (
+                channel_mgr.is_model_enabled(_classifier_primary_model)
+                and channel_mgr.is_available(_classifier_primary_model)
+            ):
+                classify_result = await classifier_primary.classify(
+                    last_msg, context=history_context, on_429=channel_mgr.handle_429
+                )
+                classifier_model = _classifier_primary_model
+            elif classifier_fallback and (
+                channel_mgr.is_model_enabled(_classifier_fallback_model)
+                and channel_mgr.is_available(_classifier_fallback_model)
+            ):
+                logging.warning(
+                    f"primary classifier ({_classifier_primary_model}) unavailable, "
+                    f"trying fallback ({_classifier_fallback_model})"
+                )
+                classify_result = await classifier_fallback.classify(
+                    last_msg, context=history_context, on_429=channel_mgr.handle_429
+                )
+                classifier_model = _classifier_fallback_model
+            else:
+                logging.warning("all classifiers unavailable, fallback to keyword")
+                classifier_model = None
             if classify_result is None:
-                if ark_available:
+                if classifier_model:
                     logging.warning("classifier returned None (failed), fallback to keyword")
                 classify_result = keyword_classify(last_msg)
             complexity = classify_result.complexity
             logging.warning(f"classify complexity={complexity.value} model={classify_result.model} msg={last_msg[:50]!r}")
 
-            if complexity == Complexity.COORDINATOR:
-                retry_candidates = _pick_model(routing.get("coordinator_candidates", []), session_key)
+            if complexity == Complexity.COMPLEX:
+                retry_candidates = _pick_model(routing.get("complex_candidates", []), session_key)
                 if not retry_candidates:
-                    retry_candidates = _pick_model(routing.get("coordinator_fallback", []), session_key)
-            elif complexity == Complexity.WRITER:
-                retry_candidates = _pick_model(routing.get("writer_candidates", []), session_key)
+                    retry_candidates = _pick_model(routing.get("complex_fallback", []), session_key)
+            else:  # SIMPLE = writer + executor 合并
+                retry_candidates = _pick_model(routing.get("simple_candidates", []), session_key)
                 if not retry_candidates:
-                    retry_candidates = _pick_model(routing.get("writer_fallback", []), session_key)
-            else:  # EXECUTOR
-                retry_candidates = _pick_model(routing.get("executor_candidates", []), session_key)
-                if not retry_candidates:
-                    retry_candidates = _pick_model(routing.get("executor_fallback", []), session_key)
+                    retry_candidates = _pick_model(routing.get("simple_fallback", []), session_key)
 
         if not retry_candidates:
             earliest = channel_mgr.earliest_recovery()
@@ -320,6 +352,20 @@ async def chat_completions(request: Request):
             )
 
     last_error = None
+    diagnosis = None
+    if requested_model == "auto":
+        # classifier 是否出错：classify_result 为 None 且不是因为 classifier_model 本身不可用
+        _classifier_errored = (
+            classify_result is None
+            and classifier_model is not None
+        )
+        diagnosis = {
+            "classify_result": classify_result.complexity.value if classify_result else None,
+            "classifier_model": classify_result.model if classify_result else None,
+            "classifier_errored": _classifier_errored,
+            "attempted_models": [],
+        }
+
     for i, (attempt_model, attempt_provider) in enumerate(retry_candidates):
         if i > 0:
             logging.warning(f"FALLBACK attempt {i}: {attempt_model} (prev error: {last_error})")
@@ -331,23 +377,19 @@ async def chat_completions(request: Request):
                 err_msg = body
             if status_code == 429:
                 channel_mgr.handle_429(_m, err_msg)
+                logging.warning(f"STREAM 429 ban: {_m} msg={err_msg[:200]}")
             else:
                 _record_failure(_m)
                 channel_mgr.mark_unavailable(_m, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(_m)))
+                logging.warning(f"STREAM {status_code} ban: {_m} backoff={_backoff_seconds(_m)}s msg={err_msg[:200]}")
 
-        role_str = "direct" if requested_model != "auto" else complexity.value
-        # 获取 provider 名称（即 channel 名称，如 "ark"/"kimi"）
-        attempt_provider_name = get_channel_for_model(attempt_model)
+        role_str = "direct" if requested_model != "auto" else (complexity.value if complexity else "multimodal")
         try:
-            channel_mgr.acquire_provider_request(attempt_provider_name)
-            try:
-                resp = await forward_request(
-                    body, attempt_model, get_channel_for_model(attempt_model), attempt_provider,
-                    on_error=_on_upstream_error,
-                    role=role_str,
-                )
-            finally:
-                channel_mgr.release_provider_request(attempt_provider_name)
+            resp = await forward_request(
+                body, attempt_model, get_channel_for_model(attempt_model), attempt_provider,
+                on_error=_on_upstream_error,
+                role=role_str,
+            )
             _clear_failure(attempt_model)
             # 请求成功后才记录分类器用量，确保统计的是真正完成路由的次数
             if requested_model == "auto" and classify_result:
@@ -374,18 +416,33 @@ async def chat_completions(request: Request):
                 channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(attempt_model)))
             last_error = f"{e.response.status_code}: {err_msg}"
             logging.warning(f"FAIL {attempt_model}: {last_error}")
+            if diagnosis is not None:
+                diagnosis["attempted_models"].append({
+                    "model": attempt_model,
+                    "status_code": e.response.status_code,
+                    "error": err_msg,
+                })
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             _record_failure(attempt_model)
             channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(attempt_model)))
             last_error = str(e)
             logging.warning(f"FAIL {attempt_model}: {last_error}")
+            if diagnosis is not None:
+                diagnosis["attempted_models"].append({
+                    "model": attempt_model,
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                })
 
     earliest = channel_mgr.earliest_recovery()
+    error_content = {
+        "error": "all candidates failed",
+        "last_error": last_error,
+        "earliest_recovery": earliest.isoformat() if earliest else None,
+    }
+    if diagnosis is not None:
+        error_content["diagnosis"] = diagnosis
     return JSONResponse(
         status_code=503,
-        content={
-            "error": "all candidates failed",
-            "last_error": last_error,
-            "earliest_recovery": earliest.isoformat() if earliest else None,
-        },
+        content=error_content,
     )

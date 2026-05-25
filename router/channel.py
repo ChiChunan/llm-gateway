@@ -1,29 +1,18 @@
 import re
 from datetime import datetime, timedelta, timezone
-from enum import Enum
 from typing import Optional
 
 CST = timezone(timedelta(hours=8))
 
 
-class ProviderState(Enum):
-    ENABLED = "enabled"
-    DRAINING = "draining"
-    DISABLED = "disabled"
-
-
 class ChannelManager:
     def __init__(self, channels: list[str], plans: dict | None = None):
-        # 初始化所有渠道状态为可用（None 表示无封禁）
+        # 所有模型的 429 封禁状态（None = 无封禁）
         self._status: dict[str, Optional[datetime]] = {c: None for c in channels}
-        # plan 名称 -> 成员渠道列表
+        # plan 名称 -> 成员列表
         self._plans: dict[str, list[str]] = {}
-        # 渠道 -> 所属 plan 名称（无 plan 时不存在该 key）
+        # model -> 所属 plan 名称
         self._channel_to_plan: dict[str, str] = {}
-        # provider 级别开关状态
-        self._provider_states: dict[str, ProviderState] = {}
-        # 各 provider 活跃请求计数
-        self._active_requests: dict[str, int] = {}
         # model 级别手动开关（与 429 封禁无关）
         self._model_enabled: dict[str, bool] = {}
         if plans:
@@ -34,7 +23,7 @@ class ChannelManager:
                     self._channel_to_plan[ch] = plan_name
 
     def is_available(self, channel: str) -> bool:
-        """检查渠道是否可用，过期封禁自动解除"""
+        """检查模型是否可用（无 429 封禁）。"""
         until = self._status.get(channel)
         if until is None:
             return True
@@ -44,58 +33,17 @@ class ChannelManager:
         return False
 
     def mark_unavailable(self, channel: str, until: datetime):
-        """将渠道标记为不可用，直到指定时间"""
+        """将模型标记为不可用，直到指定时间。"""
         self._status[channel] = until
 
     def mark_available(self, channel: str):
-        """立即恢复渠道为可用状态"""
+        """立即恢复模型为可用状态。"""
         if channel in self._status:
             self._status[channel] = None
 
     def available_channels(self) -> list[str]:
-        """返回当前所有可用渠道列表"""
+        """返回当前所有可用模型列表（无封禁）。"""
         return [c for c in self._status if self.is_available(c)]
-
-    def set_provider_state(self, provider: str, enabled: bool):
-        """设置 provider 开关：关闭时有活跃请求则进入 draining，否则直接 disabled。"""
-        if enabled:
-            self._provider_states[provider] = ProviderState.ENABLED
-        else:
-            if self._active_requests.get(provider, 0) > 0:
-                self._provider_states[provider] = ProviderState.DRAINING
-            else:
-                self._provider_states[provider] = ProviderState.DISABLED
-
-    def is_provider_available(self, provider: str) -> bool:
-        """新请求路由时检查 provider 是否接受请求（只有 ENABLED 状态才接受）。"""
-        return self._provider_states.get(provider, ProviderState.ENABLED) == ProviderState.ENABLED
-
-    def get_provider_state(self, provider: str) -> ProviderState:
-        """获取 provider 当前状态。"""
-        return self._provider_states.get(provider, ProviderState.ENABLED)
-
-    def get_active_requests(self, provider: str) -> int:
-        """获取 provider 当前活跃请求数。"""
-        return self._active_requests.get(provider, 0)
-
-    def acquire_provider_request(self, provider: str):
-        """请求开始时增加 provider 活跃计数。"""
-        self._active_requests[provider] = self._active_requests.get(provider, 0) + 1
-
-    def release_provider_request(self, provider: str):
-        """请求完成时减少活跃计数，draining 且归零时自动转为 disabled。"""
-        count = self._active_requests.get(provider, 0)
-        if count > 0:
-            self._active_requests[provider] = count - 1
-            count -= 1
-        if count == 0 and self._provider_states.get(provider) == ProviderState.DRAINING:
-            self._provider_states[provider] = ProviderState.DISABLED
-
-    def clear_provider_bans(self, plan_name: str):
-        """开启 provider 时清除其 plan 内所有模型的 429 封禁，让路由立即生效。"""
-        for ch in self._plans.get(plan_name, []):
-            if ch in self._status:
-                self._status[ch] = None
 
     def set_model_enabled(self, model: str, enabled: bool):
         """设置单个 model 的手动开关状态。"""
@@ -106,47 +54,56 @@ class ChannelManager:
         return self._model_enabled.get(model, True)
 
     def earliest_recovery(self) -> Optional[datetime]:
-        """返回最早恢复时间，全部可用时返回 None"""
+        """返回最早恢复时间，全部可用时返回 None。"""
         now = datetime.now(CST)
         times = [t for t in self._status.values() if t is not None and t > now]
         return min(times) if times else None
 
     def parse_reset_time(self, message: str) -> Optional[datetime]:
-        """从 429 错误消息中解析重置时间，失败返回 None"""
+        """从 429 错误消息中解析重置时间，失败返回 None。
+        支持两种格式：
+        - 火山引擎/字节跳动: reset at 2026-04-29 12:00:00+0800 CST.
+        - DeepSeek: Rate limit exceeded, retry in X seconds/minutes.
+        """
+        # 火山引擎格式: reset at xxx.
         match = re.search(r'reset at (.+?)\.', message)
-        if not match:
-            return None
-        raw = match.group(1).strip()
-        # 去除末尾时区名称标签（如 " CST"），保留 +0800 偏移量
-        raw = re.sub(r'\s+CST$', '', raw)
-        try:
-            dt = datetime.fromisoformat(raw)
-            # 确保返回的 datetime 带时区信息，避免与 aware datetime 比较时抛 TypeError
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=CST)
-            return dt
-        except ValueError:
-            return None
+        if match:
+            raw = match.group(1).strip()
+            raw = re.sub(r'\s+CST$', '', raw)
+            try:
+                dt = datetime.fromisoformat(raw)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=CST)
+                return dt
+            except ValueError:
+                return None
+
+        # DeepSeek 格式: retry in X seconds/minutes/hours
+        match = re.search(r'retry in (\d+)\s*(second|minute|hour)s?', message, re.IGNORECASE)
+        if match:
+            value = int(match.group(1))
+            unit = match.group(2).lower()
+            if unit == 'second':
+                delta = timedelta(seconds=value)
+            elif unit == 'minute':
+                delta = timedelta(minutes=value)
+            else:
+                delta = timedelta(hours=value)
+            return datetime.now(CST) + delta
+
+        return None
 
     def handle_429(self, channel: str, error_message: str):
-        """处理 429 限流：解析重置时间，无法解析或已过期则默认封禁 5 小时。
-        若渠道属于某 plan，则将 plan 内所有成员同步标记为同一解封时间。
+        """处理 429 限流：解析重置时间，无法解析或已过期则默认封禁 5 分钟。
+        不再使用 plan 联动，每个模型独立管理。
         """
-        # guard：channel 不存在时直接返回，避免静默创建新 key
+        # guard：channel 不存在时直接返回
         if channel not in self._status:
             return
         reset = self.parse_reset_time(error_message)
         now = datetime.now(CST)
-        # reset 已是过去时间时，以当前时间为基准封禁 5 小时
         if reset and reset > now:
             until = reset
         else:
-            until = now + timedelta(hours=5)
+            until = now + timedelta(minutes=5)
         self.mark_unavailable(channel, until=until)
-        # plan 联动：同 plan 内其余成员使用相同解封时间
-        # 跳过已被手动禁用的模型，避免误封后续恢复时机
-        plan_name = self._channel_to_plan.get(channel)
-        if plan_name:
-            for sibling in self._plans.get(plan_name, []):
-                if sibling != channel and sibling in self._status and self._model_enabled.get(sibling, True):
-                    self.mark_unavailable(sibling, until=until)

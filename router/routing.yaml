@@ -1,61 +1,51 @@
 routing:
-  classifier: doubao-seed-2-0-lite
-  coordinator_candidates:
-  - mimo-v2.5-pro
-  - kimi-for-coding
-  - glm-5-1
+  classifier_primary:
+    provider: aliyuncs
+    model: deepseek-v4-flash-aliyun
+  classifier_fallback:
+    provider: none
+    model: ""
+  complex_candidates:
   - deepseek-v4-pro
-  writer_candidates:
+  - mimo-v2.5-pro
+  - LongCat-2.0-Preview
+  simple_candidates:
   - deepseek-v4-flash
-  - doubao-seed-2-0-pro
-  executor_candidates:
   - MiniMax-M2.7-highspeed
-  - mimo-v2.5
-  coordinator_fallback:
+  simple_fallback:
+  - deepseek-v4-pro
+  - LongCat-2.0-Preview
+  complex_fallback:
   - MiniMax-M2.7-highspeed
-  - doubao-seed-2-0-pro
-  writer_fallback:
-  - MiniMax-M2.7-highspeed
-  - doubao-seed-2-0-pro
-  executor_fallback:
-  - MiniMax-M2.7-highspeed
-  - doubao-seed-2-0-pro
+  - deepseek-v4-flash
   multimodal_candidates:
   - mimo-v2.5
   - doubao-seed-2-0-pro
-provider_switches:
-  ark: true
-  kimi: true
-  minimax: true
-  deepseek: true
-  xiaomi: true
 model_switches:
-  doubao-seed-2-0-lite: true
-  doubao-seed-2-0-pro: true
-  glm-5-1: true
-  kimi-for-coding: true
+  doubao-seed-2-0-pro: false
   MiniMax-M2.7-highspeed: true
   deepseek-v4-pro: false
-  deepseek-v4-flash: true
-  mimo-v2.5-pro: true
-  mimo-v2.5: true
+  deepseek-v4-flash: false
+  deepseek-v4-flash-aliyun: true
+  mimo-v2.5-pro: false
+  mimo-v2.5: false
+  LongCat-2.0-Preview: true
 plans:
   ark:
     channels:
-    - doubao-seed-2-0-lite
     - doubao-seed-2-0-pro
-    - glm-5-1
-  kimi:
-    channels:
-    - kimi-for-coding
+    - deepseek-v4-pro
+    - deepseek-v4-flash
   minimax:
     channels:
     - MiniMax-M2.7-highspeed
-  deepseek:
-    channels:
-    - deepseek-v4-pro
-    - deepseek-v4-flash
   xiaomi:
     channels:
     - mimo-v2.5-pro
     - mimo-v2.5
+  longcat:
+    channels:
+    - LongCat-2.0-Preview
+  aliyuncs:
+    channels:
+    - deepseek-v4-flash-aliyun
