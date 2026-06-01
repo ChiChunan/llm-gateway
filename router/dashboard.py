@@ -38,7 +38,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 .tab-pane.active { display: block; }
 
 /* Stats cards */
-.stats-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+.stats-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 0; }
 @media (min-width: 768px) {
   .stats-row { grid-template-columns: repeat(4, 1fr); }
 }
@@ -51,7 +51,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 .stat-card .value.purple { color: var(--purple); }
 
 /* Bar chart (CSS only) */
-.chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; display: flex; flex-direction: column; }
+.chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; }
 .chart-card h3 { font-size: 13px; color: var(--muted); margin-bottom: 12px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
 .bar-group { margin-bottom: 10px; }
 .bar-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 12px; }
@@ -60,11 +60,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 .bar-track { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; min-width: 2px; }
 
-/* Scrollable chart content area */
+/* Chart content area */
 .chart-scroll {
   overflow-y: auto;
   overflow-x: hidden;
-  height: 340px;
+  flex: 1;
+  min-height: 0;
   padding-right: 4px;
 }
 @media (max-width: 767px) {
@@ -81,12 +82,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 .table-scroll {
   overflow-y: auto;
   overflow-x: auto;
-  height: 640px;
+  max-height: 400px;
   padding-right: 4px;
 }
 @media (max-width: 767px) {
   .table-scroll {
-    height: 520px;
+    max-height: 320px;
   }
 }
 .table-scroll::-webkit-scrollbar { height: 4px; width: 4px; }
@@ -94,7 +95,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .table-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
-/* Donut chart (CSS conic-gradient) */
+/* Overview tab sections with consistent gap */
+.overview-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
 .donut { width: 120px; height: 120px; border-radius: 50%; flex-shrink: 0; }
 .donut-legend { flex: 1; min-width: 140px; }
@@ -107,9 +114,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 .day-btn.active { background: var(--accent); color: #fff; }
 
 /* Model table */
-.table-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; overflow: hidden; display: flex; flex-direction: column; }
+.table-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow: hidden; display: flex; flex-direction: column; }
 .table-card h3 { font-size: 13px; color: var(--muted); margin-bottom: 12px; font-weight: 500; flex-shrink: 0; }
-table { width: 100%; border-collapse: collapse; min-width: 600px; }
+table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 td { padding: 10px; font-size: 13px; border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
@@ -172,6 +179,7 @@ tr:last-child td { border-bottom: none; }
   </div>
 
   <div id="tab-overview" class="tab-pane active">
+    <div class="overview-sections">
     <div class="stats-row" id="statsRow">
       <div class="stat-card"><div class="label">总请求数</div><div class="value blue" id="totalReqs">-</div></div>
       <div class="stat-card"><div class="label">输入 Tokens</div><div class="value green" id="totalPrompt">-</div></div>
@@ -224,6 +232,7 @@ tr:last-child td { border-bottom: none; }
     <div class="table-card">
       <h3>最近请求</h3>
       <div class="table-scroll" id="logsList"><div class="loading">加载中...</div></div>
+    </div>
     </div>
   </div>
 
@@ -611,35 +620,14 @@ async function loadModels() {
         : 'warn';
       const badgeNote = bd.stale ? 'STALE' : (bd.error ? 'ERROR' : bd.plan);
 
-      const hBar = bd.five_hour_left !== null ? 100 - bd.five_hour_left : 0;
-      const wBar = bd.weekly_left !== null ? 100 - bd.weekly_left : 0;
-
-      // 根据状态生成提示语
-      let tip = '';
-      if (!bd.ok || bd.error) {
-        tip = '⚠️ 数据获取失败，daemon 可能已离线';
-      } else if (bd.stale) {
-        tip = '⏰ 数据已过期，下次刷新将自动恢复';
-      } else if (bd.five_hour_status === 'danger' && bd.weekly_status === 'danger') {
-        tip = '🔥 双限额告急，谨慎使用 Codex';
-      } else if (bd.five_hour_status === 'danger') {
-        tip = '⚡ 5H 额度告急，优先处理紧急任务';
-      } else if (bd.weekly_status === 'danger') {
-        tip = '📅 周额度偏紧，注意控制调用频率';
-      } else if (bd.five_hour_status === 'warn') {
-        tip = '💡 5H 额度偏低，避免长时间任务';
-      } else if (bd.weekly_status === 'warn') {
-        tip = '📊 周额度偏低，可持续使用';
-      } else {
-        const quotes = [
-          '"Code is like humor. When you have to explain it, it\'s bad." — Cory House',
-          '"First, solve the problem. Then, write the code." — Jon Fielding',
-          '"Any fool can write code that a computer can understand." — Martin Fowler',
-          '"Talk is cheap. Show me the code." — Linus Torvalds',
-          '"代码是写给人读的，顺便让机器执行。" — Harold Abelson',
-        ];
-        tip = quotes[Math.floor(Math.random() * quotes.length)];
-      }
+      const statusText = (s) => {
+        if (!bd.ok || bd.error) return '⚠️ 数据获取失败';
+        if (bd.stale) return '⏰ 数据已过期';
+        if (s === 'danger') return '🔴 告急';
+        if (s === 'warn') return '🟡 偏低';
+        return '🟢 正常';
+      };
+      const tip = statusText(bd.five_hour_status === 'danger' || bd.weekly_status === 'danger' ? 'danger' : (bd.five_hour_status === 'warn' || bd.weekly_status === 'warn' ? 'warn' : 'ok'));
 
       bandHTML = `<div class="config-card band-card" style="grid-column:span 2;">
       <div class="config-card-header">
@@ -652,38 +640,26 @@ async function loadModels() {
 
         <!-- 5H 额度 -->
         <div>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
             <span style="font-size:11px;color:var(--muted);">5H 额度</span>
-            <span style="font-size:18px;font-weight:700;color:${sc(bd.five_hour_status)};">${bd.five_hour_left !== null ? bd.five_hour_left + '%' : '--'}</span>
+            <span style="color:${sc(bd.five_hour_status)};font-weight:600;font-size:11px;">${bd.five_hour_status !== 'error' ? bd.five_hour_status.toUpperCase() : 'ERROR'}</span>
           </div>
-          <div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden;">
-            <div style="width:${hBar}%;height:100%;background:linear-gradient(90deg,#06b6d4,#3b82f6);border-radius:4px;transition:width 0.5s;min-width:2px;"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--muted);">
-            <span>${bd.five_hour_used !== null ? '已用 ' + bd.five_hour_used + '%' : ''}</span>
-            <span style="color:${sc(bd.five_hour_status)};font-weight:600;">${bd.five_hour_status !== 'error' ? bd.five_hour_status.toUpperCase() : 'ERROR'}</span>
-          </div>
+          <span style="font-size:22px;font-weight:700;color:${sc(bd.five_hour_status)};">${bd.five_hour_left !== null ? bd.five_hour_left + '%' : '--'}</span>
         </div>
 
         <!-- WEEK 额度 -->
         <div>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
             <span style="font-size:11px;color:var(--muted);">周额度</span>
-            <span style="font-size:18px;font-weight:700;color:${sc(bd.weekly_status)};">${bd.weekly_left !== null ? bd.weekly_left + '%' : '--'}</span>
+            <span style="color:${sc(bd.weekly_status)};font-weight:600;font-size:11px;">${bd.weekly_status !== 'error' ? bd.weekly_status.toUpperCase() : 'ERROR'}</span>
           </div>
-          <div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden;">
-            <div style="width:${wBar}%;height:100%;background:linear-gradient(90deg,#a855f7,#ec4899);border-radius:4px;transition:width 0.5s;min-width:2px;"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--muted);">
-            <span>${bd.weekly_used !== null ? '已用 ' + bd.weekly_used + '%' : ''}</span>
-            <span style="color:${sc(bd.weekly_status)};font-weight:600;">${bd.weekly_status !== 'error' ? bd.weekly_status.toUpperCase() : 'ERROR'}</span>
-          </div>
+          <span style="font-size:22px;font-weight:700;color:${sc(bd.weekly_status)};">${bd.weekly_left !== null ? bd.weekly_left + '%' : '--'}</span>
         </div>
 
       </div>
 
-      <!-- 提示语 -->
-      <div style="margin-top:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:11px;color:var(--muted);font-style:italic;border-left:2px solid var(--accent);">
+      <!-- 状态提示 -->
+      <div style="margin-top:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:11px;color:var(--muted);border-left:2px solid var(--accent);">
         ${tip}
       </div>
 
