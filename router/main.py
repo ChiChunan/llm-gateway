@@ -1,4 +1,5 @@
 import json as _json
+import json
 import logging
 import os
 from dotenv import load_dotenv
@@ -11,13 +12,13 @@ import random
 import httpx
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import provider_state as _pstate
 from channel import ChannelManager
 from classifier import Classifier, ClassifyResult, Complexity, keyword_classify
-from proxy import forward_request
+from proxy import forward_request, convert_openai_to_anthropic_response, convert_openai_sse_to_anthropic_sse, AnthropicSSEConverter
 from providers import init_providers, get_channel_for_model, get_provider_for_model
 from usage import init_usage_db
 from api_stats import router as stats_router, config_router
@@ -139,10 +140,10 @@ def _pick_model(candidates: list[str], session_key: str | None = None) -> list[t
         seed = int(hashlib.sha256(session_key.encode()).hexdigest(), 16)
         ordered = available[:]
         random.Random(seed).shuffle(ordered)
-        logging.warning(f"pick_model session_key={session_key!r} available={available} ordered={ordered}")
+        logging.debug(f"pick_model session_key={session_key!r} available={available} ordered={ordered}")
     else:
         ordered = available
-        logging.warning(f"pick_model no_session_key available={available} ordered={ordered}")
+        logging.debug(f"pick_model no_session_key available={available} ordered={ordered}")
 
     # 返回 (model, provider) 有序列表
     result = []
@@ -185,7 +186,7 @@ def _get_session_key(messages: list[dict]) -> str | None:
 
 GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "V.A.L.O.R.")
 
-_PUBLIC_PATHS = {"/health", "/dashboard"}
+_PUBLIC_PATHS = {"/health", "/dashboard", "/quota/codex", "/quota/codex/simple"}
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -193,17 +194,36 @@ class AuthMiddleware(BaseHTTPMiddleware):
         is_readonly_config = request.method == "GET" and request.url.path in {"/api/config/providers", "/api/config/models"}
         if request.url.path in _PUBLIC_PATHS or request.url.path.startswith("/static") or request.url.path.startswith("/api/stats") or is_readonly_config:
             return await call_next(request)
+        # 支持 Bearer token 和 x-api-key 两种认证方式
         auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {GATEWAY_API_KEY}":
-            return JSONResponse(status_code=401, content={"error": "unauthorized"})
-        return await call_next(request)
+        x_api_key = request.headers.get("x-api-key", "")
+        if auth == f"Bearer {GATEWAY_API_KEY}" or x_api_key == GATEWAY_API_KEY:
+            return await call_next(request)
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 预热连接池（提前建立到各 provider 的连接）
+    # 预热连接池：对每个 provider 发一个轻量请求，真正建立 TCP+TLS 连接
     from proxy import get_client
-    get_client()
+    client = get_client()
+    _warmup_tasks = []
+    for _name, _prov in providers.items():
+        try:
+            # 用一个极短的超时发 GET 到 base_url，只为了触发 TCP 握手
+            _warmup_tasks.append(
+                client.get(
+                    _prov.base_url.rstrip("/") + "/models",
+                    timeout=httpx.Timeout(5.0, connect=3.0),
+                )
+            )
+        except Exception:
+            pass
+    if _warmup_tasks:
+        import asyncio
+        # 启动时等待一次预热，确保连接池真的建立起来
+        await asyncio.gather(*_warmup_tasks, return_exceptions=True)
+    logging.info(f"connection pool warmup: {len(_warmup_tasks)} providers")
     yield
     # 关闭时关闭全局 httpx client，释放连接池
     from proxy import _CLIENT
@@ -216,6 +236,29 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(AuthMiddleware)
+
+
+@app.middleware("http")
+async def add_codex_cors(request: Request, call_next):
+    """为 /quota/codex/simple 添加 CORS 头 + OPTIONS 预检支持。"""
+    if request.url.path == "/quota/codex/simple":
+        if request.method == "OPTIONS":
+            return Response(
+                status_code=204,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                    "Cache-Control": "no-store",
+                },
+            )
+        resp = await call_next(request)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    return await call_next(request)
 
 app.include_router(stats_router)
 app.include_router(config_router)
@@ -235,12 +278,110 @@ async def health():
     }
 
 
+@app.get("/quota/codex")
+async def codex_quota():
+    """查询 Codex 额度状态（来自 codex_keepalive daemon）"""
+    status_file = "/tmp/codex_status.json"
+    if not os.path.exists(status_file):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "codex status not available", "hint": "codex_keepalive daemon may not be running"},
+        )
+    try:
+        with open(status_file, "r") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)},
+        )
+
+
+@app.get("/quota/codex/simple")
+async def codex_quota_simple():
+    """小米手环专用轻量 Codex 额度接口 — 扁平 JSON，含状态和 CORS。"""
+    status_file = "/tmp/codex_status.json"
+    error_response = {
+        "ok": False,
+        "title": "CODEX",
+        "plan": "--",
+        "five_hour_left": None,
+        "weekly_left": None,
+        "five_hour_used": None,
+        "weekly_used": None,
+        "five_hour_status": "error",
+        "weekly_status": "error",
+        "age_seconds": None,
+        "updated_at": "--:--",
+        "stale": True,
+        "error": "quota_parse_failed",
+    }
+    if not os.path.exists(status_file):
+        error_response["error"] = "status_file_not_found"
+        return JSONResponse(status_code=503, content=error_response)
+    try:
+        with open(status_file, "r") as f:
+            raw = json.load(f)
+        parsed = raw.get("parsed", {})
+        if not parsed:
+            error_response["error"] = "parsed_field_missing"
+            return JSONResponse(status_code=500, content=error_response)
+        plan_raw = (parsed.get("plan") or "unknown").upper()
+        h = parsed.get("hourly_limit") or {}
+        w = parsed.get("weekly_limit") or {}
+        h_left = h.get("pct_left", 0)
+        w_left = w.get("pct_left", 0)
+        h_used = max(0, 100 - h_left)
+        w_used = max(0, 100 - w_left)
+        age = parsed.get("data_age_seconds")
+        # stale: age > 300s
+        stale = bool(age is not None and age > 300)
+        # updated_at: from timestamp field
+        ts = raw.get("timestamp", "")
+        updated_at = "--:--"
+        if ts:
+            try:
+                dt = datetime.fromisoformat(ts)
+                updated_at = dt.strftime("%H:%M")
+            except Exception:
+                pass
+
+        def _status(left: int | None) -> str:
+            if left is None:
+                return "error"
+            if left >= 60:
+                return "ok"
+            if left >= 30:
+                return "warn"
+            return "danger"
+
+        return {
+            "ok": True,
+            "title": "CODEX",
+            "plan": plan_raw,
+            "five_hour_left": h_left,
+            "weekly_left": w_left,
+            "five_hour_used": h_used,
+            "weekly_used": w_used,
+            "five_hour_status": _status(h_left),
+            "weekly_status": _status(w_left),
+            "age_seconds": age,
+            "updated_at": updated_at,
+            "stale": stale,
+        }
+    except Exception as e:
+        error_response["error"] = f"quota_parse_failed: {e}"
+        return JSONResponse(status_code=500, content=error_response)
+
+
 @app.get("/v1/models")
 async def list_models():
     routing = cfg["routing"]
     all_candidates = (
         routing.get("complex_candidates", [])
         + routing.get("simple_candidates", [])
+        + routing.get("multimodal_candidates", [])
     )
     # fallback candidates 与主候选重叠，不单独列出
     seen = set()
@@ -252,13 +393,540 @@ async def list_models():
     return {"object": "list", "data": models}
 
 
-@app.post("/v1/chat/completions")
-async def chat_completions(request: Request):
+def _convert_anthropic_to_openai(anthropic_body: dict) -> dict:
+    """将 Anthropic /v1/messages 请求转换为 OpenAI /v1/chat/completions 格式。
+
+    转换内容：
+    - system 字段提取为独立 system role 消息
+    - messages 中 content 字符串转为 OpenAI 格式
+    - messages 中 content 数组（多模态）转为 OpenAI content 数组
+    - max_tokens 映射到 max_tokens
+    - stream 参数保留
+    - tools 映射为 OpenAI tools 格式
+    """
+    openai_messages = []
+
+    # 处理 system 字段
+    system = anthropic_body.get("system", "")
+    if system:
+        if isinstance(system, str):
+            openai_messages.append({"role": "system", "content": system})
+        elif isinstance(system, list):
+            # system 为数组时，提取所有 text 内容合并
+            system_text = ""
+            for block in system:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    system_text += block.get("text", "")
+            if system_text:
+                openai_messages.append({"role": "system", "content": system_text})
+
+    # 处理 messages
+    for msg in anthropic_body.get("messages", []):
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+
+        if isinstance(content, str):
+            # 字符串内容直接转换
+            openai_messages.append({"role": role, "content": content})
+        elif isinstance(content, list):
+            # 数组内容（可能包含多模态）
+            openai_content = []
+            for block in content:
+                if isinstance(block, dict):
+                    block_type = block.get("type", "")
+                    if block_type == "text":
+                        openai_content.append({"type": "text", "text": block.get("text", "")})
+                    elif block_type == "image":
+                        # Anthropic image 格式转换
+                        source = block.get("source", {})
+                        if source.get("type") == "base64":
+                            media_type = source.get("media_type", "image/jpeg")
+                            data = source.get("data", "")
+                            openai_content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{media_type};base64,{data}"}
+                            })
+                        elif source.get("type") == "url":
+                            openai_content.append({
+                                "type": "image_url",
+                                "image_url": {"url": source.get("url", "")}
+                            })
+                    elif block_type == "tool_use":
+                        # tool_use 转换为 OpenAI tool_calls 格式
+                        if "tool_calls" not in openai_messages[-1] if openai_messages else True:
+                            openai_messages.append({
+                                "role": role,
+                                "content": "",
+                                "tool_calls": []
+                            })
+                            # 修正：需要找到最后一条消息并添加 tool_calls
+                        # 简化处理：直接在消息中添加 tool_calls
+                        if openai_messages and openai_messages[-1].get("role") == role:
+                            if "tool_calls" not in openai_messages[-1]:
+                                openai_messages[-1]["tool_calls"] = []
+                            openai_messages[-1]["tool_calls"].append({
+                                "id": block.get("id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": block.get("name", ""),
+                                    "arguments": _json.dumps(block.get("input", {}))
+                                }
+                            })
+                            continue
+                    elif block_type == "tool_result":
+                        # tool_result 转换为 OpenAI tool role 消息
+                        openai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": block.get("tool_use_id", ""),
+                            "content": block.get("content", "")
+                        })
+                        continue
+
+            # 如果没有特殊处理（如 tool_use），添加普通内容
+            if openai_content:
+                # 如果只有一个 text 块，简化为字符串
+                if len(openai_content) == 1 and openai_content[0]["type"] == "text":
+                    openai_messages.append({"role": role, "content": openai_content[0]["text"]})
+                else:
+                    openai_messages.append({"role": role, "content": openai_content})
+
+    # 构建 OpenAI 请求
+    openai_body = {
+        "model": anthropic_body.get("model", "auto"),
+        "messages": openai_messages,
+        "max_tokens": anthropic_body.get("max_tokens", 4096),
+    }
+
+    # 可选参数
+    if "temperature" in anthropic_body:
+        openai_body["temperature"] = anthropic_body["temperature"]
+    if "top_p" in anthropic_body:
+        openai_body["top_p"] = anthropic_body["top_p"]
+    if "stream" in anthropic_body:
+        openai_body["stream"] = anthropic_body["stream"]
+    if "stop_sequences" in anthropic_body:
+        openai_body["stop"] = anthropic_body["stop_sequences"]
+
+    # 处理 tools
+    tools = anthropic_body.get("tools", [])
+    if tools:
+        openai_tools = []
+        for tool in tools:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool.get("name", ""),
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("input_schema", {})
+                }
+            })
+        openai_body["tools"] = openai_tools
+
+    # 处理 tool_choice
+    tool_choice = anthropic_body.get("tool_choice")
+    if tool_choice:
+        if isinstance(tool_choice, dict):
+            choice_type = tool_choice.get("type", "")
+            if choice_type == "auto":
+                openai_body["tool_choice"] = "auto"
+            elif choice_type == "any":
+                openai_body["tool_choice"] = "required"
+            elif choice_type == "tool":
+                openai_body["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": tool_choice.get("name", "")}
+                }
+        elif isinstance(tool_choice, str):
+            openai_body["tool_choice"] = tool_choice
+
+    return openai_body
+
+
+@app.post("/v1/messages")
+async def anthropic_messages(request: Request):
+    """Anthropic /v1/messages 端点，转换为 OpenAI 格式后内部转发。
+
+    接收 Anthropic Messages API 格式请求，转换为 OpenAI chat/completions 格式，
+    通过内部路由逻辑选择模型，转发请求，并将响应转换回 Anthropic 格式。
+    """
     body = await request.json()
+    requested_model = body.get("model", "auto")
+    stream = body.get("stream", False)
+
+    logging.debug(f"anthropic_messages requested_model={requested_model!r} stream={stream}")
+
+    # 转换 Anthropic 请求为 OpenAI 格式
+    openai_body = _convert_anthropic_to_openai(body)
+    messages = openai_body.get("messages", [])
+
+    routing = cfg["routing"]
+
+    # 指定具体模型时直接路由，不走分类器
+    if requested_model != "auto":
+        provider = get_provider_for_model(requested_model, providers)
+        if provider is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"unknown model: {requested_model}"},
+            )
+        if not channel_mgr.is_available(requested_model):
+            return JSONResponse(
+                status_code=503,
+                content={"error": f"model {requested_model} is rate-limited"},
+            )
+        retry_candidates = [(requested_model, provider)]
+    else:
+        session_key = _get_session_key(messages)
+        complexity = None
+        classify_result = None
+        classifier_model = None
+
+        # 含图片时跳过分类器，直接路由到多模态候选列表
+        if _has_image(messages):
+            retry_candidates = _pick_model(routing.get("multimodal_candidates", []), session_key)
+        else:
+            # 提取分类上下文
+            if classifier_primary:
+                history_context, last_msg = classifier_primary.extract_context_for_classify(messages)
+            elif classifier_fallback:
+                history_context, last_msg = classifier_fallback.extract_context_for_classify(messages)
+            else:
+                last_msg = ""
+                for msg in messages[::-1]:
+                    if msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if isinstance(content, list):
+                            content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+                        last_msg = str(content)[:2000]
+                        break
+                history_context = ""
+
+            classify_result = None
+
+            # 分类器二级降级
+            if classifier_primary and (
+                channel_mgr.is_model_enabled(_classifier_primary_model)
+                and channel_mgr.is_available(_classifier_primary_model)
+            ):
+                classify_result = await classifier_primary.classify(
+                    last_msg, context=history_context, on_429=channel_mgr.handle_429
+                )
+                classifier_model = _classifier_primary_model
+            elif classifier_fallback and (
+                channel_mgr.is_model_enabled(_classifier_fallback_model)
+                and channel_mgr.is_available(_classifier_fallback_model)
+            ):
+                classify_result = await classifier_fallback.classify(
+                    last_msg, context=history_context, on_429=channel_mgr.handle_429
+                )
+                classifier_model = _classifier_fallback_model
+            else:
+                logging.debug("all classifiers unavailable, fallback to keyword")
+                classifier_model = None
+
+            if classify_result is None:
+                if classifier_model:
+                    logging.debug("classifier returned None (failed), fallback to keyword")
+                classify_result = keyword_classify(last_msg)
+
+            complexity = classify_result.complexity
+            logging.warning(f"classify complexity={complexity.value} model={classify_result.model} msg={last_msg[:50]!r}")
+
+            if complexity == Complexity.COMPLEX:
+                retry_candidates = _pick_model(routing.get("complex_candidates", []), session_key)
+                if not retry_candidates:
+                    retry_candidates = _pick_model(routing.get("complex_fallback", []), session_key)
+            else:
+                retry_candidates = _pick_model(routing.get("simple_candidates", []), session_key)
+                if not retry_candidates:
+                    retry_candidates = _pick_model(routing.get("simple_fallback", []), session_key)
+
+        if not retry_candidates:
+            earliest = channel_mgr.earliest_recovery()
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "all channels unavailable",
+                    "earliest_recovery": earliest.isoformat() if earliest else None,
+                },
+            )
+
+    last_error = None
+    diagnosis = None
+    if requested_model == "auto":
+        _classifier_errored = (
+            classify_result is None
+            and classifier_model is not None
+        )
+        diagnosis = {
+            "classify_result": classify_result.complexity.value if classify_result else None,
+            "classifier_model": classify_result.model if classify_result else None,
+            "classifier_errored": _classifier_errored,
+            "attempted_models": [],
+        }
+
+    for i, (attempt_model, attempt_provider) in enumerate(retry_candidates):
+        if i > 0:
+            logging.warning(f"FALLBACK attempt {i}: {attempt_model} (prev error: {last_error})")
+
+        async def _on_upstream_error(status_code: int, resp_body: str, _m=attempt_model):
+            try:
+                err_msg = _json.loads(resp_body).get("error", {}).get("message", resp_body)
+            except Exception:
+                err_msg = resp_body
+            if status_code == 429:
+                channel_mgr.handle_429(_m, err_msg)
+                logging.warning(f"STREAM 429 ban: {_m} msg={err_msg[:200]}")
+            else:
+                _record_failure(_m)
+                channel_mgr.mark_unavailable(_m, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(_m)))
+                logging.warning(f"STREAM {status_code} ban: {_m} backoff={_backoff_seconds(_m)}s msg={err_msg[:200]}")
+
+        role_str = "direct" if requested_model != "auto" else (complexity.value if complexity else "multimodal")
+        try:
+            resp = await forward_request(
+                openai_body, attempt_model, get_channel_for_model(attempt_model), attempt_provider,
+                on_error=_on_upstream_error,
+                role=role_str,
+            )
+            _clear_failure(attempt_model)
+
+            # 请求成功后才记录分类器用量
+            if requested_model == "auto" and classify_result:
+                from providers import get_channel_for_model as _gcfm
+                usage_db.record(
+                    model=classify_result.model,
+                    channel=_gcfm(classify_result.model),
+                    role="classifier",
+                    prompt_tokens=classify_result.prompt_tokens,
+                    completion_tokens=classify_result.completion_tokens,
+                    latency_ms=classify_result.latency_ms,
+                )
+
+            # 转换响应为 Anthropic 格式
+            if stream:
+                # 流式响应：转换 SSE 格式
+                async def generate_anthropic_sse():
+                    converter = AnthropicSSEConverter(target_model=attempt_model)
+                    async for line in resp.body_iterator:
+                        line_str = line.decode("utf-8") if isinstance(line, bytes) else line
+                        converted_lines = convert_openai_sse_to_anthropic_sse(line_str, converter)
+                        for converted_line in converted_lines:
+                            yield (converted_line + "\n").encode("utf-8")
+
+                return StreamingResponse(
+                    generate_anthropic_sse(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                    }
+                )
+            else:
+                # 非流式响应：转换 JSON 格式
+                openai_json = json.loads(resp.body) if isinstance(resp.body, bytes) else resp.body
+                anthropic_response = convert_openai_to_anthropic_response(openai_json)
+                return JSONResponse(content=anthropic_response)
+
+        except httpx.HTTPStatusError as e:
+            err_msg = ""
+            try:
+                err_msg = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                pass
+            if e.response.status_code == 429:
+                channel_mgr.handle_429(attempt_model, err_msg)
+            else:
+                _record_failure(attempt_model)
+                channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(attempt_model)))
+            last_error = f"{e.response.status_code}: {err_msg}"
+            logging.warning(f"FAIL {attempt_model}: {last_error}")
+            if diagnosis is not None:
+                diagnosis["attempted_models"].append({
+                    "model": attempt_model,
+                    "status_code": e.response.status_code,
+                    "error": err_msg,
+                })
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            _record_failure(attempt_model)
+            channel_mgr.mark_unavailable(attempt_model, until=datetime.now(CST) + timedelta(seconds=_backoff_seconds(attempt_model)))
+            last_error = str(e)
+            logging.warning(f"FAIL {attempt_model}: {last_error}")
+            if diagnosis is not None:
+                diagnosis["attempted_models"].append({
+                    "model": attempt_model,
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                })
+
+    earliest = channel_mgr.earliest_recovery()
+    error_content = {
+        "error": "all candidates failed",
+        "last_error": last_error,
+        "earliest_recovery": earliest.isoformat() if earliest else None,
+    }
+    if diagnosis is not None:
+        error_content["diagnosis"] = diagnosis
+    return JSONResponse(
+        status_code=503,
+        content=error_content,
+    )
+
+
+@app.post("/v1/chat/completions")
+async def anthropic_messages(request: Request):
+    """Anthropic Messages API 端点，协议转换后走现有路由。
+
+    Anthropic 请求结构（示例）：
+      {
+        "model": "mimo-v2.5-pro",
+        "system": "你是一个助手",
+        "messages": [{"role": "user", "content": "你好"}],
+        "max_tokens": 1024,
+        "stream": false,
+        "stop_sequences": ["END"]
+      }
+
+    转换为 OpenAI 格式后走 chat_completions 路由逻辑。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": {"type": "invalid_request_error", "message": "invalid JSON body"}})
+
+    # 认证：支持 x-api-key header 或 Authorization Bearer
+    auth_header = request.headers.get("x-api-key") or request.headers.get("Authorization", "").replace("Bearer ", "")
+    # 先用 Gateway API Key 认证（与现有逻辑一致）
+    if auth_header != GATEWAY_API_KEY:
+        return JSONResponse(
+            status_code=401,
+            content={"type": "authentication_error", "message": "invalid API key"},
+        )
+
+    # 字段提取
+    anthropic_model = body.get("model", "")
+    system_msg = body.get("system", "")
+    messages = body.get("messages", [])
+    max_tokens = body.get("max_tokens", 4096)
+    stop_sequences = body.get("stop_sequences", None)
+    stream = body.get("stream", False)
+
+    # OpenAI 格式请求（含 tools/tool_choice）转发到 chat_completions
+    if body.get("tools") or body.get("tool_choice"):
+        return await chat_completions(request, _body=body)
+
+    if not anthropic_model:
+        return JSONResponse(
+            status_code=400,
+            content={"type": "invalid_request_error", "message": "model is required"},
+        )
+
+    if not messages:
+        return JSONResponse(
+            status_code=400,
+            content={"type": "invalid_request_error", "message": "messages is required and must not be empty"},
+        )
+
+    # 转换为 OpenAI 格式
+    openai_messages = []
+    if system_msg:
+        openai_messages.append({"role": "system", "content": system_msg})
+    for msg in messages:
+        role = msg.get("role", "user")
+        # Anthropic 的 assistant/developer/system → OpenAI 的 assistant/user/system
+        if role not in ("user", "assistant", "system"):
+            role = "user"
+        content = msg.get("content", "")
+        openai_messages.append({"role": role, "content": content})
+
+    openai_body = {
+        "model": anthropic_model,
+        "messages": openai_messages,
+        "max_tokens": max_tokens,
+        "stream": stream,
+    }
+    if stop_sequences:
+        openai_body["stop"] = stop_sequences if len(stop_sequences) == 1 else stop_sequences
+
+    # 走现有 /v1/chat/completions 路由逻辑
+    requested_model = openai_body.get("model", "auto")
+    routing = cfg["routing"]
+
+    # 复用 _pick_model（已存在）
+    session_key = _get_session_key(openai_messages)
+    retry_candidates = _pick_model(
+        routing.get("simple_candidates", []) + routing.get("simple_fallback", []),
+        session_key,
+    )
+    if not retry_candidates:
+        return JSONResponse(
+            status_code=503,
+            content={"type": "rate_limit_error", "message": "all channels unavailable"},
+        )
+
+    from proxy import forward_request
+    from providers import get_channel_for_model, get_provider_for_model
+
+    last_error = None
+    for i, (attempt_model, attempt_provider) in enumerate(retry_candidates):
+        try:
+            resp = await forward_request(
+                openai_body, attempt_model,
+                get_channel_for_model(attempt_model),
+                attempt_provider,
+                role="anthropic",
+            )
+
+            # 流式响应：转换 SSE 格式
+            if stream:
+                from proxy import convert_openai_sse_to_anthropic_sse
+                from fastapi.responses import StreamingResponse
+
+                async def anthropic_stream(generator):
+                    converter = AnthropicSSEConverter(target_model=attempt_model)
+                    async for line in generator.body_iterator:
+                        line_str = line.decode(errors="replace").strip()
+                        if not line_str:
+                            yield line
+                            continue
+                        converted = convert_openai_sse_to_anthropic_sse(line_str, converter)
+                        for c in converted:
+                            yield f"{c}\n\n".encode()
+
+                # 直接返回流式响应（暂时不包装，客户端可接受 OpenAI SSE 格式）
+                return resp
+
+            # 非流式响应：JSONResponse，直接转换 body
+            from fastapi.responses import JSONResponse as JR, StreamingResponse
+            if isinstance(resp, StreamingResponse):
+                return resp
+            body_bytes = resp.body
+            if isinstance(body_bytes, memoryview):
+                body_bytes = bytes(body_bytes)
+            openai_resp = json.loads(body_bytes if isinstance(body_bytes, bytes) else body_bytes.encode())
+            anthropic_resp = convert_openai_to_anthropic_response(openai_resp)
+            return JR(content=anthropic_resp, status_code=resp.status_code)
+
+        except httpx.HTTPStatusError as e:
+            last_error = str(e)
+            continue
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return JSONResponse(
+        status_code=503,
+        content={"type": "api_error", "message": f"all candidates failed: {last_error}"},
+    )
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request, _body: dict | None = None):
+    body = _body if _body is not None else await request.json()
     requested_model = body.get("model", "auto")
     messages = body.get("messages", [])
     routing = cfg["routing"]
-    logging.warning(f"chat_completions requested_model={requested_model!r}")
+    logging.debug(f"chat_completions requested_model={requested_model!r}")
 
     # 指定具体模型时直接路由，不走分类器
     if requested_model != "auto":
@@ -314,7 +982,7 @@ async def chat_completions(request: Request):
                 channel_mgr.is_model_enabled(_classifier_fallback_model)
                 and channel_mgr.is_available(_classifier_fallback_model)
             ):
-                logging.warning(
+                logging.debug(
                     f"primary classifier ({_classifier_primary_model}) unavailable, "
                     f"trying fallback ({_classifier_fallback_model})"
                 )
@@ -323,11 +991,11 @@ async def chat_completions(request: Request):
                 )
                 classifier_model = _classifier_fallback_model
             else:
-                logging.warning("all classifiers unavailable, fallback to keyword")
+                logging.debug("all classifiers unavailable, fallback to keyword")
                 classifier_model = None
             if classify_result is None:
                 if classifier_model:
-                    logging.warning("classifier returned None (failed), fallback to keyword")
+                    logging.debug("classifier returned None (failed), fallback to keyword")
                 classify_result = keyword_classify(last_msg)
             complexity = classify_result.complexity
             logging.warning(f"classify complexity={complexity.value} model={classify_result.model} msg={last_msg[:50]!r}")

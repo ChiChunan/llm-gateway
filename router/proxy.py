@@ -1,7 +1,8 @@
 import json as _json
 import logging
 import time
-from typing import Callable, Optional
+import uuid
+from typing import Callable, Literal, Optional
 
 import httpx
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -9,15 +10,18 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from providers import ProviderConfig, get_channel_for_model
 from usage import get_usage_db
 
-# connect timeout 10s
-# 流式响应需要更长的 read timeout（SSE 保持连接）
-# 非流式响应可以短一些，快速失败
+# Connect timeout 10s
+# Stream responses need a longer read timeout (SSE keeps the connection open)
+# Non-stream responses can be shorter for fast failure
 _TIMEOUT_STREAM = httpx.Timeout(10.0, read=300.0)
 _TIMEOUT_JSON = httpx.Timeout(10.0, read=120.0)
-# 全局连接池：每 host 最多 100 个连接，空闲连接 30s 后回收
-# 重连时复用已有连接，消除新建 TCP+TLS 握手开销
+# Global connection pool: max 100 connections per host, idle connections recycled after 30s
+# Reuse connections on reconnect, eliminating new TCP+TLS handshake overhead
 _LIMITS = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
 _CLIENT: httpx.AsyncClient | None = None
+
+# Supported output format literals
+OutputFormat = Literal["openai", "anthropic"]
 
 
 def get_client() -> httpx.AsyncClient:
@@ -115,15 +119,26 @@ async def forward_request(
     provider: ProviderConfig,
     on_error: "Callable | None" = None,
     role: str = "unknown",
+    output_format: OutputFormat = "openai",
 ) -> StreamingResponse | JSONResponse:
-    """Forward request to the appropriate provider, streaming SSE or returning JSON."""
+    """Forward request to the appropriate provider, streaming SSE or returning JSON.
+
+    Args:
+        output_format: "openai" for native passthrough, "anthropic" to convert to Anthropic SSE/JSON.
+    """
     payload = build_forwarded_request(body, target_model)
     is_stream = payload.get("stream", False)
     start = time.monotonic()
 
     if is_stream:
-        return await _stream_response(payload, target_model, channel, provider, start, on_error=on_error, role=role)
-    return await _json_response(payload, target_model, channel, provider, start, role=role)
+        return await _stream_response(
+            payload, target_model, channel, provider, start,
+            on_error=on_error, role=role, output_format=output_format,
+        )
+    return await _json_response(
+        payload, target_model, channel, provider, start,
+        role=role, output_format=output_format,
+    )
 
 
 async def _stream_response(
@@ -134,10 +149,15 @@ async def _stream_response(
     start: float,
     on_error: "Callable | None" = None,
     role: str = "unknown",
+    output_format: OutputFormat = "openai",
 ) -> StreamingResponse:
     """Stream SSE response byte-by-byte, notify caller of upstream errors via on_error callback.
 
     Also extracts usage from the final SSE chunk and records it.
+
+    When output_format is "anthropic", the upstream OpenAI SSE chunks are converted
+    to Anthropic SSE format before yielding, and the response media type is
+    "text/event-stream".
     """
     db = get_usage_db()
     accumulated_usage: dict | None = None
@@ -147,7 +167,7 @@ async def _stream_response(
         final_status = 200
         try:
             client = get_client()
-            # 流式请求需要更长的 read timeout
+            # Streaming requests need a longer read timeout
             async with client.stream(
                 "POST",
                 f"{provider.base_url}/chat/completions",
@@ -162,13 +182,29 @@ async def _stream_response(
                         await on_error(resp.status_code, body_bytes.decode(errors="replace"))
                     logging.warning(f"PROXY stream upstream {resp.status_code}: model={target_model} channel={channel} body={body_bytes[:300]}")
                     err = _json.dumps({"error": "upstream error", "status": resp.status_code})
-                    yield f"data: {err}\n\n".encode()
+                    if output_format == "anthropic":
+                        yield f"event: error\ndata: {err}\n\n".encode("utf-8")
+                    else:
+                        yield f"data: {err}\n\n".encode("utf-8")
                     return
-                async for line in resp.aiter_lines():
-                    usage = _parse_usage_from_chunk(line)
-                    if usage is not None:
-                        accumulated_usage = usage
-                    yield (line + "\n\n").encode("utf-8")
+
+                if output_format == "anthropic":
+                    # Stateful converter: tracks whether message_start has been emitted
+                    converter = AnthropicSSEConverter(target_model=target_model)
+                    accumulated_usage = None
+                    async for line in resp.aiter_lines():
+                        usage = _parse_usage_from_chunk(line)
+                        if usage is not None:
+                            accumulated_usage = usage
+                        for out_line in converter.feed(line):
+                            yield (out_line + "\n").encode("utf-8")
+                else:
+                    # OpenAI native passthrough
+                    async for line in resp.aiter_lines():
+                        usage = _parse_usage_from_chunk(line)
+                        if usage is not None:
+                            accumulated_usage = usage
+                        yield (line + "\n").encode("utf-8")
         except Exception:
             final_status = 500
             raise
@@ -185,7 +221,8 @@ async def _stream_response(
             else:
                 db.record(target_model, channel, role=role, status_code=final_status, latency_ms=latency)
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    media_type = "text/event-stream"
+    return StreamingResponse(generate(), media_type=media_type)
 
 
 async def _json_response(
@@ -195,10 +232,14 @@ async def _json_response(
     provider: ProviderConfig,
     start: float,
     role: str = "unknown",
+    output_format: OutputFormat = "openai",
 ) -> JSONResponse:
     """Send a non-streaming request and return the JSON response.
 
     Also extracts usage from the response and records it.
+
+    When output_format is "anthropic", the upstream OpenAI JSON response is
+    converted to Anthropic message format before returning.
     """
     db = get_usage_db()
     client = get_client()
@@ -229,4 +270,267 @@ async def _json_response(
     else:
         db.record(target_model, channel, role=role, status_code=resp.status_code, latency_ms=latency)
 
+    if output_format == "anthropic":
+        content = convert_openai_to_anthropic_response(content)
+
     return JSONResponse(content=content, status_code=resp.status_code)
+
+
+class AnthropicSSEConverter:
+    """Converts OpenAI SSE stream chunks into Anthropic SSE event sequence.
+
+    The Anthropic streaming protocol requires a strictly ordered sequence of events:
+
+        1. event: ping                          (optional, sent every ~5s by upstream)
+        2. event: message_start   + data: {...}
+        3. event: content_block_start + data: {"index":0,"type":"content_block_start",...}
+        4. event: content_block_delta (x N) + data: {"index":0,"type":"content_block_delta",...}
+        5. event: content_block_stop  + data: {"index":0,"type":"content_block_stop"}
+        6. event: message_delta      + data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},...}
+        7. event: message_stop        + data: {"type":"message_stop"}
+
+    OpenAI SSE chunk examples:
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}
+        data: {"choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}
+        data: {"choices":[{"index":0,"finish_reason":"stop"}]}
+        data: [DONE]
+
+    This converter is stateful — call feed() for each raw SSE line in order.
+    It buffers the first chunk (the role+initial-content chunk) so that the
+    message_start event can include the model name extracted from the chunk.
+    """
+
+    _State = Literal[
+        "idle",       # waiting for first data line
+        "started",    # message_start emitted, awaiting content chunks
+        "done",       # message_stop emitted, no more output
+    ]
+
+    def __init__(self, target_model: str = "unknown-model"):
+        self._state: AnthropicSSEConverter._State = "idle"
+        self._model = target_model
+        # Buffer: (delta_obj, finish_reason, usage_dict)
+        self._first_chunk: dict | None = None
+        self._finish_reason: str | None = None
+        self._usage: dict | None = None
+
+    def feed(self, line: str) -> list[str]:
+        """Process one raw SSE line from upstream.
+
+        Returns a list of Anthropic SSE output lines (no trailing newline).
+        Empty list means no output for this input line.
+        """
+        if self._state == "done":
+            return []
+
+        # Non-data lines (comments, empty lines) are passed through as-is
+        if not line.startswith("data:"):
+            return [line]
+
+        raw = line[5:].strip()
+
+        # OpenAI SSE terminator — convert to Anthropic message_stop
+        if raw == "[DONE]":
+            self._state = "done"
+            # If we never got a role chunk, emit a minimal message sequence now
+            if self._state != "started":
+                return [
+                    "event: message_start",
+                    f"data: {_json.dumps({'type':'message_start','message':{'id':f'msg_{uuid.uuid4().hex[:8]}','type':'message','role':'assistant','content':[],'model':self._model,'stop_reason':None,'stop_sequence':None,'usage':{'input_tokens':0,'output_tokens':0}}})}",
+                    "",
+                    "event: content_block_start",
+                    f"data: {_json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}})}",
+                    "",
+                    "event: content_block_stop",
+                    "data: {\"type\":\"content_block_stop\",\"index\":0}",
+                    "",
+                    "event: message_delta",
+                    f"data: {_json.dumps({'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':{'output_tokens':0}})}",
+                    "",
+                    "event: message_stop",
+                    "data: {\"type\":\"message_stop\"}",
+                ]
+            return [
+                "event: content_block_stop",
+                "data: {\"type\":\"content_block_stop\",\"index\":0}",
+                "",
+                "event: message_delta",
+                f"data: {_json.dumps({'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':self._usage or {}})}",
+                "",
+                "event: message_stop",
+                "data: {\"type\":\"message_stop\"}",
+            ]
+
+        try:
+            obj = _json.loads(raw)
+        except Exception:
+            return [line]
+
+        choices: list = obj.get("choices", [])
+        if not choices or not isinstance(choices, list):
+            return [line]
+
+        first = choices[0]
+        delta: dict = first.get("delta", {})
+        finish_reason = first.get("finish_reason")
+        self._usage = obj.get("usage")
+
+        # -- Extract message metadata from first chunk --
+        if self._first_chunk is None:
+            # First chunk: captures role, initial content, finish_reason
+            self._first_chunk = delta
+            self._finish_reason = finish_reason
+            if finish_reason:
+                # No content — finish_reason alone means an empty response
+                msg_id = f"msg_{uuid.uuid4().hex[:8]}"
+                self._state = "done"
+                return [
+                    "event: message_start",
+                    f"data: {_json.dumps({'type':'message_start','message':{'id':msg_id,'type':'message','role':'assistant','content':[],'model':self._model,'stop_reason':_finish_reason_to_anthropic(finish_reason),'stop_sequence':None,'usage':self._usage or {'input_tokens':0,'output_tokens':0}}})}",
+                    "",
+                    "event: content_block_start",
+                    f"data: {_json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}})}",
+                    "",
+                    "event: content_block_stop",
+                    "data: {\"type\":\"content_block_stop\",\"index\":0}",
+                    "",
+                    "event: message_delta",
+                    f"data: {_json.dumps({'type':'message_delta','delta':{'stop_reason':_finish_reason_to_anthropic(finish_reason)},'usage':self._usage or {}})}",
+                    "",
+                    "event: message_stop",
+                    "data: {\"type\":\"message_stop\"}",
+                ]
+
+            # Defer message_start until we know if there will be actual content
+            # Store role and emit nothing yet — will emit on next content chunk
+            role = delta.get("role", "")
+            content = delta.get("content", "")
+            if content:
+                # role+content in same chunk
+                msg_id = f"msg_{uuid.uuid4().hex[:8]}"
+                self._state = "started"
+                return [
+                    "event: message_start",
+                    f"data: {_json.dumps({'type':'message_start','message':{'id':msg_id,'type':'message','role':role,'content':[],'model':self._model,'stop_reason':None,'stop_sequence':None,'usage':{'input_tokens':0,'output_tokens':0}}})}",
+                    "",
+                    "event: content_block_start",
+                    f"data: {_json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}})}",
+                    "",
+                    "event: content_block_delta",
+                    f"data: {_json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':content}})}",
+                ]
+            # role only — wait for content in next chunk
+            return []
+
+        # -- Subsequent chunks --
+        if self._state != "started":
+            # We have a buffered role but no content block started yet
+            role = self._first_chunk.get("role", "assistant")
+            msg_id = f"msg_{uuid.uuid4().hex[:8]}"
+            self._state = "started"
+            out = [
+                "event: message_start",
+                f"data: {_json.dumps({'type':'message_start','message':{'id':msg_id,'type':'message','role':role,'content':[],'model':self._model,'stop_reason':None,'stop_sequence':None,'usage':{'input_tokens':0,'output_tokens':0}}})}",
+                "",
+                "event: content_block_start",
+                f"data: {_json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}})}",
+            ]
+        else:
+            out = []
+
+        content = delta.get("content", "")
+
+        if finish_reason:
+            self._state = "done"
+            if content:
+                out.extend([
+                    "",
+                    "event: content_block_delta",
+                    f"data: {_json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':content}})}",
+                    "",
+                    "event: content_block_stop",
+                    "data: {\"type\":\"content_block_stop\",\"index\":0}",
+                    "",
+                    "event: message_delta",
+                    f"data: {_json.dumps({'type':'message_delta','delta':{'stop_reason':_finish_reason_to_anthropic(finish_reason),'stop_sequence':None},'usage':self._usage or {}})}",
+                    "",
+                    "event: message_stop",
+                    "data: {\"type\":\"message_stop\"}",
+                ])
+            else:
+                out.extend([
+                    "",
+                    "event: content_block_stop",
+                    "data: {\"type\":\"content_block_stop\",\"index\":0}",
+                    "",
+                    "event: message_delta",
+                    f"data: {_json.dumps({'type':'message_delta','delta':{'stop_reason':_finish_reason_to_anthropic(finish_reason),'stop_sequence':None},'usage':self._usage or {}})}",
+                    "",
+                    "event: message_stop",
+                    "data: {\"type\":\"message_stop\"}",
+                ])
+        elif content:
+            out.extend([
+                "",
+                "event: content_block_delta",
+                f"data: {_json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':content}})}",
+            ])
+
+        return out
+
+
+def _finish_reason_to_anthropic(reason: str | None) -> str:
+    """Map OpenAI finish_reason to Anthropic stop_reason."""
+    mapping = {
+        "stop": "end_turn",
+        "length": "max_tokens",
+        "content_filter": "content_filter",
+    }
+    if not reason:
+        return "end_turn"
+    return mapping.get(reason, reason)
+
+
+def convert_openai_to_anthropic_response(openai_response: dict) -> dict:
+    """将 OpenAI 格式的非流式响应转换为 Anthropic 格式。
+
+    OpenAI:  choices[0].message.content -> Anthropic: content[0].text
+    """
+    anthropic_response = {
+        "id": openai_response.get("id", ""),
+        "type": "message",
+        "role": "assistant",
+        "model": openai_response.get("model", ""),
+        "usage": openai_response.get("usage", {}),
+    }
+    choices = openai_response.get("choices", [])
+    if choices and len(choices) > 0:
+        message = choices[0].get("message", {})
+        content_text = message.get("content", "")
+        anthropic_response["content"] = [{"type": "text", "text": content_text}]
+        if message.get("reasoning_content"):
+            anthropic_response["content"].insert(
+                0, {"type": "text", "text": message["reasoning_content"]}
+            )
+        stop_reason = choices[0].get("finish_reason", "")
+        anthropic_response["stop_reason"] = _finish_reason_to_anthropic(stop_reason)
+    else:
+        anthropic_response["content"] = []
+        anthropic_response["stop_reason"] = None
+    stop = openai_response.get("stop")
+    if stop:
+        anthropic_response["stop_sequence"] = stop if isinstance(stop, str) else (stop[0] if stop else None)
+    else:
+        anthropic_response["stop_sequence"] = None
+    return anthropic_response
+
+
+def convert_openai_sse_to_anthropic_sse(line: str, converter: AnthropicSSEConverter | None = None) -> list[str]:
+    """Convert a single OpenAI SSE line to Anthropic SSE lines.
+
+    If converter is None, a new instance is created (stateless single-line usage).
+    For streaming, pass the same converter instance to preserve state across lines.
+    """
+    if converter is None:
+        converter = AnthropicSSEConverter()
+    return converter.feed(line)

@@ -95,7 +95,7 @@ class ChannelManager:
 
     def handle_429(self, channel: str, error_message: str):
         """处理 429 限流：解析重置时间，无法解析或已过期则默认封禁 5 分钟。
-        不再使用 plan 联动，每个模型独立管理。
+        如果该 channel 属于 plan，则同 plan 成员共享相同恢复时间。
         """
         # guard：channel 不存在时直接返回
         if channel not in self._status:
@@ -107,3 +107,9 @@ class ChannelManager:
         else:
             until = now + timedelta(minutes=5)
         self.mark_unavailable(channel, until=until)
+        plan_name = self._channel_to_plan.get(channel)
+        if not plan_name:
+            return
+        for member in self._plans.get(plan_name, []):
+            if member != channel and member in self._status:
+                self.mark_unavailable(member, until=until)

@@ -64,6 +64,9 @@ simple（除 complex 以外的所有任务）：
 
 
 class Complexity(str, Enum):
+    COORDINATOR = "coordinator"
+    WRITER = "writer"
+    EXECUTOR = "executor"
     COMPLEX = "complex"
     SIMPLE = "simple"
 
@@ -211,8 +214,17 @@ class Classifier:
         try:
             raw, usage, latency = await self._call_llm(last_user_message, context=context, on_429=on_429)
             data = json.loads(raw.strip())
+            role = data["role"]
+            if role == "coordinator":
+                complexity = Complexity.COORDINATOR
+            elif role == "writer":
+                complexity = Complexity.WRITER
+            elif role == "executor":
+                complexity = Complexity.EXECUTOR
+            else:
+                complexity = Complexity(role)
             return ClassifyResult(
-                complexity=Complexity(data["role"]),
+                complexity=complexity,
                 model=self._model,
                 prompt_tokens=usage.get("prompt_tokens", 0) or 0,
                 completion_tokens=usage.get("completion_tokens", 0) or 0,

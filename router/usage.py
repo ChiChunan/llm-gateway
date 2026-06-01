@@ -151,7 +151,8 @@ class UsageDB:
                     SUM(prompt_tokens) as total_prompt_tokens,
                     SUM(completion_tokens) as total_completion_tokens,
                     SUM(cached_tokens) as total_cached_tokens,
-                    AVG(latency_ms) as avg_latency_ms
+                    AVG(latency_ms) as avg_latency_ms,
+                    CASE WHEN channel = 'aliyuncs' THEN 0 ELSE 1 END as supports_cached_tokens
                 FROM usage_logs
                 WHERE timestamp >= ? AND timestamp <= ?
                 {role_clause}

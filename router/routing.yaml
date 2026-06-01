@@ -4,7 +4,7 @@ routing:
     model: deepseek-v4-flash-aliyun
   classifier_fallback:
     provider: none
-    model: ""
+    model: ''
   complex_candidates:
   - deepseek-v4-pro
   - mimo-v2.5-pro
@@ -22,13 +22,13 @@ routing:
   - mimo-v2.5
   - doubao-seed-2-0-pro
 model_switches:
-  doubao-seed-2-0-pro: false
+  doubao-seed-2-0-pro: true
   MiniMax-M2.7-highspeed: true
-  deepseek-v4-pro: false
-  deepseek-v4-flash: false
+  deepseek-v4-pro: true
+  deepseek-v4-flash: true
   deepseek-v4-flash-aliyun: true
-  mimo-v2.5-pro: false
-  mimo-v2.5: false
+  mimo-v2.5-pro: true
+  mimo-v2.5: true
   LongCat-2.0-Preview: true
 plans:
   ark:

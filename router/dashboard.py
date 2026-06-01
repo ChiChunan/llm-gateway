@@ -391,25 +391,58 @@ async function loadDaily(days) {
 // ─── Token bar chart (CSS) ───
 async function loadTokenChart(days) {
   const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
-  const resp = await fetchJSON('/api/stats/summary?group_by=model&since=' + since);
-  const rows = resp.data || [];
+  const [respRequest, respClassifier] = await Promise.all([
+    fetchJSON('/api/stats/summary?group_by=model&since=' + since + '&role_filter=request'),
+    fetchJSON('/api/stats/summary?group_by=model&since=' + since + '&role_filter=classifier'),
+  ]);
+
+  // 合并下游模型 + 路由模型消耗，按总量排序
+  const merged = {};
+  for (const r of (respRequest.data || [])) {
+    const model = r.grp_model || r.grp || r.model || '-';
+    merged[model] = {
+      model,
+      total_prompt_tokens: r.total_prompt_tokens || 0,
+      total_completion_tokens: r.total_completion_tokens || 0,
+      total_cached_tokens: r.total_cached_tokens || 0,
+      supports_cached_tokens: r.supports_cached_tokens ?? 1,
+    };
+  }
+  for (const r of (respClassifier.data || [])) {
+    const model = r.grp_model || r.grp || r.model || '-';
+    if (merged[model]) {
+      merged[model].total_prompt_tokens += r.total_prompt_tokens || 0;
+      merged[model].total_completion_tokens += r.total_completion_tokens || 0;
+      merged[model].total_cached_tokens += r.total_cached_tokens || 0;
+      merged[model].supports_cached_tokens = (merged[model].supports_cached_tokens && (r.supports_cached_tokens ?? 1)) ? 1 : 0;
+    } else {
+      merged[model] = {
+        model,
+        total_prompt_tokens: r.total_prompt_tokens || 0,
+        total_completion_tokens: r.total_completion_tokens || 0,
+        total_cached_tokens: r.total_cached_tokens || 0,
+        supports_cached_tokens: r.supports_cached_tokens ?? 1,
+      };
+    }
+  }
+  const rows = Object.values(merged).sort((a, b) =>
+    ((b.total_prompt_tokens + b.total_completion_tokens) || 0) -
+    ((a.total_prompt_tokens + a.total_completion_tokens) || 0)
+  );
+
   const container = document.getElementById('tokenBars');
   container.innerHTML = '';
 
   const maxTokens = Math.max(...rows.map(r => (r.total_prompt_tokens || 0) + (r.total_completion_tokens || 0)), 1);
 
   for (const r of rows) {
-    const model = r.grp_model || r.grp || r.model || '-';
+    const model = r.model || '-';
     const cached = r.total_cached_tokens || 0;
     const nonCached = Math.max(0, (r.total_prompt_tokens || 0) - cached);
     const comp = r.total_completion_tokens || 0;
     const total = cached + nonCached + comp;
     if (total === 0) continue;
-
-    const wCached = (cached / maxTokens * 100).toFixed(1);
-    const wNonCached = (nonCached / maxTokens * 100).toFixed(1);
-    const wComp = (comp / maxTokens * 100).toFixed(1);
-    const wTotal = (total / maxTokens * 100).toFixed(1);
+    const showCached = r.supports_cached_tokens ? fmt(cached) : 'N/A';
 
     container.innerHTML += `<div class="bar-group">
       <div class="bar-label">
@@ -417,14 +450,14 @@ async function loadTokenChart(days) {
         <span class="val">${fmt(total)}</span>
       </div>
       <div class="bar-track" style="height:12px;">
-        <div class="bar-fill" style="width:${wTotal}%;background:var(--border);position:relative;">
-          <div class="bar-fill" style="width:${(cached/total*100).toFixed(1)}%;background:#a855f7;position:absolute;left:0;top:0;bottom:0;"></div>
-          <div class="bar-fill" style="width:${(nonCached/total*100).toFixed(1)}%;background:#22c55e;position:absolute;left:${(cached/total*100).toFixed(1)}%;top:0;bottom:0;"></div>
-          <div class="bar-fill" style="width:${(comp/total*100).toFixed(1)}%;background:#f59e0b;position:absolute;left:${((cached+nonCached)/total*100).toFixed(1)}%;top:0;bottom:0;"></div>
+        <div class="bar-fill" style="width:${(total / maxTokens * 100).toFixed(1)}%;background:var(--border);position:relative;">
+          ${r.supports_cached_tokens ? `<div class="bar-fill" style="width:${(cached/total*100).toFixed(1)}%;background:#a855f7;position:absolute;left:0;top:0;bottom:0;"></div>` : ''}
+          <div class="bar-fill" style="width:${(nonCached/total*100).toFixed(1)}%;background:#22c55e;position:absolute;left:${r.supports_cached_tokens ? (cached/total*100).toFixed(1) + '%' : '0'};top:0;bottom:0;"></div>
+          <div class="bar-fill" style="width:${(comp/total*100).toFixed(1)}%;background:#f59e0b;position:absolute;left:${(((r.supports_cached_tokens ? cached : 0)+nonCached)/total*100).toFixed(1)}%;top:0;bottom:0;"></div>
         </div>
       </div>
       <div style="display:flex;gap:12px;margin-top:2px;font-size:10px;color:var(--muted);">
-        <span>🟣 缓存 ${fmt(cached)}</span>
+        <span>🟣 缓存 ${showCached}</span>
         <span>🟢 输入 ${fmt(nonCached)}</span>
         <span>🟡 输出 ${fmt(comp)}</span>
       </div>
@@ -495,10 +528,49 @@ async function loadModels() {
   const data = await resp.json();
   const modelsByProvider = data.data || {};
   const entries = Object.entries(modelsByProvider);
-  if (entries.length === 0) {
+  // 同时拉 Codex 额度
+  let codexHTML = '';
+  try {
+    const cr = await fetch('/quota/codex');
+    if (cr.ok) {
+      const cd = await cr.json();
+      if (cd && cd.parsed) {
+        const p = cd.parsed;
+        const hLeft = p.hourly_limit ? p.hourly_limit.pct_left : 0;
+        const wLeft = p.weekly_limit ? p.weekly_limit.pct_left : 0;
+        const hPct = 100 - hLeft;
+        const wPct = 100 - wLeft;
+        codexHTML = `<div class="config-card codex-card">
+      <div class="config-card-header">
+        <span class="config-card-provider" style="color:#06b6d4">Codex 额度</span>
+        <span class="config-card-badge ${hPct > 90 ? 'warn' : 'ok'}">${hPct}% 已用</span>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px">
+          <span>5h 额度</span><span>${hLeft}% 剩余</span>
+        </div>
+        <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+          <div style="width:${hPct}%;background:linear-gradient(90deg,#06b6d4,#3b82f6);height:100%;border-radius:4px;transition:width 0.5s"></div>
+        </div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px">
+          <span>周额度</span><span>${wLeft}% 剩余</span>
+        </div>
+        <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+          <div style="width:${wPct}%;background:linear-gradient(90deg,#a855f7,#ec4899);height:100%;border-radius:4px;transition:width 0.5s"></div>
+        </div>
+      </div>
+    </div>`;
+      }
+    }
+  } catch(e) {}
+
+  if (entries.length === 0 && !codexHTML) {
     container.innerHTML = '<div class="loading">暂无数据</div>'; return;
   }
-  container.innerHTML = '';
+
+  let html = '';
   for (const [provider, models] of entries) {
     const enabled = models.filter(m => m.enabled).length;
     const total = models.length;
@@ -515,10 +587,10 @@ async function loadModels() {
           <span class="config-status-dot ${dotClass}"></span>
           <span class="config-model-name" title="${m.name}">${m.name}</span>
         </div>
-        <button class="toggle-btn" style="background:${btnColor}" onclick="toggleModel('${m.name.replace(/'/g,"\\'")}',${!m.enabled})">${btnLabel}</button>
+        <button class="toggle-btn" style="background:${btnColor}" onclick="toggleModel(\'${m.name.replace(/\'/g,"\\\\\'")}\',${!m.enabled})">${btnLabel}</button>
       </div>`;
     }
-    container.innerHTML += `<div class="config-card">
+    html += `<div class="config-card">
       <div class="config-card-header">
         <span class="config-card-provider" style="color:${color.fg}">${provider}</span>
         <span class="config-card-badge ${badgeClass}">${badgeLabel}</span>
@@ -526,6 +598,41 @@ async function loadModels() {
       <div class="config-card-models">${modelsHTML}</div>
     </div>`;
   }
+    html += codexHTML;
+  // ─── 小米手环预览卡片 ───
+  let bandHTML = '';
+  try {
+    const br = await fetch('/quota/codex/simple');
+    if (br.ok) {
+      const bd = await br.json();
+      const statusColor = (s) => s === 'ok' ? 'var(--green)' : s === 'warn' ? 'var(--amber)' : s === 'danger' ? 'var(--red)' : 'var(--muted)';
+      const staleLabel = bd.stale ? ' ⚠ STALE' : '';
+      bandHTML = `<div class="config-card band-card" style="grid-column:1/-1;max-width:400px;">
+      <div class="config-card-header">
+        <span class="config-card-provider" style="color:#06b6d4">⌚ 小米手环</span>
+        <span class="config-card-badge ${bd.ok ? (bd.five_hour_status === 'danger' || bd.weekly_status === 'danger' ? 'warn' : 'ok') : 'warn'}">${bd.ok ? bd.plan : 'OFFLINE'}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
+        <div style="text-align:center;">
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;">5H</div>
+          <div style="font-size:22px;font-weight:700;color:${statusColor(bd.five_hour_status)};">${bd.five_hour_left !== null ? bd.five_hour_left + '%' : '--'}</div>
+          <div style="font-size:10px;color:var(--muted);">${bd.five_hour_used !== null ? bd.five_hour_used + '% used' : ''}</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;">WEEK</div>
+          <div style="font-size:22px;font-weight:700;color:${statusColor(bd.weekly_status)};">${bd.weekly_left !== null ? bd.weekly_left + '%' : '--'}</div>
+          <div style="font-size:10px;color:var(--muted);">${bd.weekly_used !== null ? bd.weekly_used + '% used' : ''}</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:6px;border-top:1px solid var(--border);font-size:10px;color:var(--muted);">
+        <span>⏱ ${bd.updated_at}${staleLabel}</span>
+        <span>${bd.age_seconds !== null ? bd.age_seconds + 's ago' : ''}${bd.error ? ' | ' + bd.error : ''}</span>
+      </div>
+    </div>`;
+    }
+  } catch(e) {}
+  html += bandHTML;
+  container.innerHTML = html;
 }
 
 async function toggleModel(name, enable) {

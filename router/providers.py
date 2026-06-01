@@ -28,12 +28,14 @@ MODEL_TO_CHANNEL: dict[str, str] = {
     "doubao-seed-2-0-pro": "ark",
     "deepseek-v4-pro": "ark",
     "deepseek-v4-flash": "ark",
+    "glm-5-1": "ark",
     "MiniMax-M2.7-highspeed": "minimax",
     "mimo-v2.5-pro": "xiaomi",
     "mimo-v2.5": "xiaomi",
     "LongCat-2.0-Preview": "longcat",
     "deepseek-v4-flash-aliyun": "aliyuncs",
     "deepseek-v4-flash": "ark",
+    "kimi-for-coding": "kimi",
 }
 
 # Channel -> default model (for /v1/models listing)
