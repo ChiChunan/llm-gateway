@@ -607,7 +607,7 @@ async function loadModels() {
       const bd = await br.json();
       const statusColor = (s) => s === 'ok' ? 'var(--green)' : s === 'warn' ? 'var(--amber)' : s === 'danger' ? 'var(--red)' : 'var(--muted)';
       const staleLabel = bd.stale ? ' ⚠ STALE' : '';
-      bandHTML = `<div class="config-card band-card" style="grid-column:1/-1;max-width:400px;">
+        bandHTML = `<div class="config-card band-card" style="grid-column:span 2;">
       <div class="config-card-header">
         <span class="config-card-provider" style="color:#06b6d4">⌚ 小米手环</span>
         <span class="config-card-badge ${bd.ok ? (bd.five_hour_status === 'danger' || bd.weekly_status === 'danger' ? 'warn' : 'ok') : 'warn'}">${bd.ok ? bd.plan : 'OFFLINE'}</span>
