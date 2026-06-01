@@ -605,25 +605,41 @@ async function loadModels() {
     const br = await fetch('/quota/codex/simple');
     if (br.ok) {
       const bd = await br.json();
-      const statusColor = (s) => s === 'ok' ? 'var(--green)' : s === 'warn' ? 'var(--amber)' : s === 'danger' ? 'var(--red)' : 'var(--muted)';
+      const sc = (s) => s === 'ok' ? 'var(--green)' : s === 'warn' ? 'var(--amber)' : s === 'danger' ? 'var(--red)' : 'var(--muted)';
       const badgeClass = bd.ok
         ? (bd.five_hour_status === 'danger' || bd.weekly_status === 'danger' ? 'warn' : 'ok')
         : 'warn';
-      const staleNote = bd.stale ? '<span style="color:var(--amber);font-size:10px;"> ⚠ 数据已过期</span>' : '';
-      const errorNote = bd.error ? `<span style="color:var(--red);font-size:10px;"> | ${bd.error}</span>` : '';
       const badgeNote = bd.stale ? 'STALE' : (bd.error ? 'ERROR' : bd.plan);
 
-      // 估算已用 token（基于 5h limit ≈ 50万，week ≈ 200万，实际按比例）
-      const est5hUsed = bd.five_hour_left !== null ? Math.round((100 - bd.five_hour_left) * 5000) : null;
-      const estWeekUsed = bd.weekly_left !== null ? Math.round((100 - bd.weekly_left) * 20000) : null;
-      const fmtTokens = (n) => n === null ? '--' : (n >= 1000 ? (n / 1000).toFixed(1) + 'K' : n);
-
-      // 进度条宽度（基于 used %）
       const hBar = bd.five_hour_left !== null ? 100 - bd.five_hour_left : 0;
       const wBar = bd.weekly_left !== null ? 100 - bd.weekly_left : 0;
 
-      // 预计下次刷新（等待约 20 分钟 ± 抖动，不精确但有参考价值）
-      const nextMin = bd.age_seconds !== null ? Math.max(0, Math.round((1200 - bd.age_seconds) / 60)) : null;
+      // 根据状态生成提示语
+      let tip = '';
+      if (!bd.ok || bd.error) {
+        tip = '⚠️ 数据获取失败，daemon 可能已离线';
+      } else if (bd.stale) {
+        tip = '⏰ 数据已过期，下次刷新将自动恢复';
+      } else if (bd.five_hour_status === 'danger' && bd.weekly_status === 'danger') {
+        tip = '🔥 双限额告急，谨慎使用 Codex';
+      } else if (bd.five_hour_status === 'danger') {
+        tip = '⚡ 5H 额度告急，优先处理紧急任务';
+      } else if (bd.weekly_status === 'danger') {
+        tip = '📅 周额度偏紧，注意控制调用频率';
+      } else if (bd.five_hour_status === 'warn') {
+        tip = '💡 5H 额度偏低，避免长时间任务';
+      } else if (bd.weekly_status === 'warn') {
+        tip = '📊 周额度偏低，可持续使用';
+      } else {
+        const quotes = [
+          '"Code is like humor. When you have to explain it, it\'s bad." — Cory House',
+          '"First, solve the problem. Then, write the code." — Jon Fielding',
+          '"Any fool can write code that a computer can understand." — Martin Fowler',
+          '"Talk is cheap. Show me the code." — Linus Torvalds',
+          '"代码是写给人读的，顺便让机器执行。" — Harold Abelson',
+        ];
+        tip = quotes[Math.floor(Math.random() * quotes.length)];
+      }
 
       bandHTML = `<div class="config-card band-card" style="grid-column:span 2;">
       <div class="config-card-header">
@@ -631,51 +647,46 @@ async function loadModels() {
         <span class="config-card-badge ${badgeClass}">${badgeNote}</span>
       </div>
 
-      <!-- 5H 额度 -->
-      <div style="margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
-          <span style="font-size:11px;color:var(--muted);">5H 额度</span>
-          <span style="font-size:14px;font-weight:700;color:${statusColor(bd.five_hour_status)};">${bd.five_hour_left !== null ? bd.five_hour_left + '%' : '--'} 剩余</span>
+      <!-- 两列并排：5H | WEEK -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:10px;">
+
+        <!-- 5H 额度 -->
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+            <span style="font-size:11px;color:var(--muted);">5H 额度</span>
+            <span style="font-size:18px;font-weight:700;color:${sc(bd.five_hour_status)};">${bd.five_hour_left !== null ? bd.five_hour_left + '%' : '--'}</span>
+          </div>
+          <div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden;">
+            <div style="width:${hBar}%;height:100%;background:linear-gradient(90deg,#06b6d4,#3b82f6);border-radius:4px;transition:width 0.5s;min-width:2px;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--muted);">
+            <span>${bd.five_hour_used !== null ? '已用 ' + bd.five_hour_used + '%' : ''}</span>
+            <span style="color:${sc(bd.five_hour_status)};font-weight:600;">${bd.five_hour_status !== 'error' ? bd.five_hour_status.toUpperCase() : 'ERROR'}</span>
+          </div>
         </div>
-        <div style="background:var(--border);border-radius:4px;height:10px;overflow:hidden;">
-          <div style="width:${hBar}%;height:100%;background:linear-gradient(90deg,#06b6d4,#3b82f6);border-radius:4px;transition:width 0.5s;min-width:2px;"></div>
+
+        <!-- WEEK 额度 -->
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+            <span style="font-size:11px;color:var(--muted);">周额度</span>
+            <span style="font-size:18px;font-weight:700;color:${sc(bd.weekly_status)};">${bd.weekly_left !== null ? bd.weekly_left + '%' : '--'}</span>
+          </div>
+          <div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden;">
+            <div style="width:${wBar}%;height:100%;background:linear-gradient(90deg,#a855f7,#ec4899);border-radius:4px;transition:width 0.5s;min-width:2px;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--muted);">
+            <span>${bd.weekly_used !== null ? '已用 ' + bd.weekly_used + '%' : ''}</span>
+            <span style="color:${sc(bd.weekly_status)};font-weight:600;">${bd.weekly_status !== 'error' ? bd.weekly_status.toUpperCase() : 'ERROR'}</span>
+          </div>
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;font-size:10px;color:var(--muted);">
-          <span>${bd.five_hour_used !== null ? '已用 ' + bd.five_hour_used + '%' : ''}${est5hUsed !== null ? ' ≈ ' + fmtTokens(est5hUsed) + ' tok' : ''}</span>
-          <span style="color:${statusColor(bd.five_hour_status)};">${bd.five_hour_status !== 'error' ? bd.five_hour_status.toUpperCase() : 'ERROR'}</span>
-        </div>
+
       </div>
 
-      <!-- WEEK 额度 -->
-      <div style="margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
-          <span style="font-size:11px;color:var(--muted);">周额度</span>
-          <span style="font-size:14px;font-weight:700;color:${statusColor(bd.weekly_status)};">${bd.weekly_left !== null ? bd.weekly_left + '%' : '--'} 剩余</span>
-        </div>
-        <div style="background:var(--border);border-radius:4px;height:10px;overflow:hidden;">
-          <div style="width:${wBar}%;height:100%;background:linear-gradient(90deg,#a855f7,#ec4899);border-radius:4px;transition:width 0.5s;min-width:2px;"></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;font-size:10px;color:var(--muted);">
-          <span>${bd.weekly_used !== null ? '已用 ' + bd.weekly_used + '%' : ''}${estWeekUsed !== null ? ' ≈ ' + fmtTokens(estWeekUsed) + ' tok' : ''}</span>
-          <span style="color:${statusColor(bd.weekly_status)};">${bd.weekly_status !== 'error' ? bd.weekly_status.toUpperCase() : 'ERROR'}</span>
-        </div>
+      <!-- 提示语 -->
+      <div style="margin-top:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:11px;color:var(--muted);font-style:italic;border-left:2px solid var(--accent);">
+        ${tip}
       </div>
 
-      <!-- 底部状态栏 -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;color:var(--muted);text-align:center;">
-        <div>
-          <div style="font-size:9px;text-transform:uppercase;opacity:0.7;">数据时间</div>
-          <div style="color:var(--text);font-weight:600;">${bd.updated_at}${staleNote}</div>
-        </div>
-        <div>
-          <div style="font-size:9px;text-transform:uppercase;opacity:0.7;">下次刷新</div>
-          <div style="color:var(--text);font-weight:600;">${nextMin !== null && nextMin > 0 ? '≈ ' + nextMin + 'min' : '即将'}</div>
-        </div>
-        <div>
-          <div style="font-size:9px;text-transform:uppercase;opacity:0.7;">数据年龄</div>
-          <div style="color:var(--text);font-weight:600;">${bd.age_seconds !== null ? bd.age_seconds + 's' : '--'}${errorNote}</div>
-        </div>
-      </div>
     </div>`;
     }
   } catch(e) {}
