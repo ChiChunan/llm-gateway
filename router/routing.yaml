@@ -1,0 +1,51 @@
+routing:
+  classifier_primary:
+    provider: aliyuncs
+    model: deepseek-v4-flash-aliyun
+  classifier_fallback:
+    provider: none
+    model: ''
+  complex_candidates:
+  - deepseek-v4-pro
+  - mimo-v2.5-pro
+  - LongCat-2.0-Preview
+  simple_candidates:
+  - deepseek-v4-flash
+  - MiniMax-M2.7-highspeed
+  simple_fallback:
+  - deepseek-v4-pro
+  - LongCat-2.0-Preview
+  complex_fallback:
+  - MiniMax-M2.7-highspeed
+  - deepseek-v4-flash
+  multimodal_candidates:
+  - mimo-v2.5
+  - doubao-seed-2-0-pro
+model_switches:
+  doubao-seed-2-0-pro: true
+  MiniMax-M2.7-highspeed: true
+  deepseek-v4-pro: true
+  deepseek-v4-flash: true
+  deepseek-v4-flash-aliyun: true
+  mimo-v2.5-pro: true
+  mimo-v2.5: true
+  LongCat-2.0-Preview: true
+plans:
+  ark:
+    channels:
+    - doubao-seed-2-0-pro
+    - deepseek-v4-pro
+    - deepseek-v4-flash
+  minimax:
+    channels:
+    - MiniMax-M2.7-highspeed
+  xiaomi:
+    channels:
+    - mimo-v2.5-pro
+    - mimo-v2.5
+  longcat:
+    channels:
+    - LongCat-2.0-Preview
+  aliyuncs:
+    channels:
+    - deepseek-v4-flash-aliyun

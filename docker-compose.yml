@@ -1,0 +1,20 @@
+services:
+  router:
+    build: ./router
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY:-V.A.L.O.R.}
+      - ARK_API_KEY=${ARK_API_KEY}
+      - ARK_BASE_URL=${ARK_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding/v3}
+      - KIMI_API_KEY=${KIMI_API_KEY}
+      - KIMI_BASE_URL=${KIMI_BASE_URL:-https://api.kimi.com/coding/v1}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://v2.aicodee.com/v1}
+    volumes:
+      - ./router/routing.yaml:/app/routing.yaml
+      - usage-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  usage-data:

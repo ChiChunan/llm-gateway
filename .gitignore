@@ -1,0 +1,14 @@
+.env
+*.env
+new-api/config/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+router/venv/
+router/data/
+.gitnexus
+.worktrees/
+.claude/
+usage.db
+codex_status.json
