@@ -393,6 +393,39 @@ async def list_models():
     return {"object": "list", "data": models}
 
 
+def _is_openai_format(body) -> bool:
+    """检测请求 body 是 OpenAI /v1/chat/completions 格式而非 Anthropic /v1/messages 格式。
+
+    关键区分：Anthropic 的 messages[*].content 必须是 list（可能含图片块），
+    OpenAI 的 messages[*].content 通常是字符串。系统提示也用 messages 列表而非
+    顶层 system 字段。
+
+    保守判断：所有非空 messages 的 content 都是字符串（且没有顶层 system 字段）
+    → 视为 OpenAI 格式。
+    """
+    if not isinstance(body, dict):
+        return False
+    if body.get("system") is not None:
+        return False  # 顶层 system 字段是 Anthropic 特征
+    if body.get("stop_sequences") is not None:
+        return False  # Anthropic 字段
+    messages = body.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return False
+    string_count = 0
+    list_count = 0
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            string_count += 1
+        elif isinstance(content, list):
+            list_count += 1
+    # 至少有一条 string content，且没有 list content → OpenAI 格式
+    return string_count > 0 and list_count == 0
+
+
 def _convert_anthropic_to_openai(anthropic_body: dict) -> dict:
     """将 Anthropic /v1/messages 请求转换为 OpenAI /v1/chat/completions 格式。
 
@@ -813,6 +846,10 @@ async def anthropic_messages(request: Request):
 
     # OpenAI 格式请求（含 tools/tool_choice）转发到 chat_completions
     if body.get("tools") or body.get("tool_choice"):
+        return await chat_completions(request, _body=body)
+
+    # 检测 OpenAI 格式请求（content 是字符串而非 list）→ 透传，不做协议转换
+    if _is_openai_format(body):
         return await chat_completions(request, _body=body)
 
     if not anthropic_model:
