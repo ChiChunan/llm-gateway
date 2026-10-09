@@ -6,46 +6,49 @@ routing:
     provider: none
     model: ''
   complex_candidates:
-  - deepseek-v4-pro
-  - mimo-v2.5-pro
-  - LongCat-2.0-Preview
+  - glm-latest
+  - mimo-v2.6-pro
+  - LongCat-2.0
   simple_candidates:
-  - deepseek-v4-flash
-  - MiniMax-M2.7-highspeed
+  - ark-code-latest
+  - mimo-v2.6-flash
+  - MiniMax-M3
   simple_fallback:
-  - deepseek-v4-pro
-  - LongCat-2.0-Preview
+  - glm-latest
+  - LongCat-2.0
   complex_fallback:
-  - MiniMax-M2.7-highspeed
-  - deepseek-v4-flash
+  - MiniMax-M3
+  - ark-code-latest
   multimodal_candidates:
-  - mimo-v2.5
-  - doubao-seed-2-0-pro
+  - mimo-v2.6-flash
+  - ark-code-latest
 model_switches:
-  doubao-seed-2-0-pro: true
-  MiniMax-M2.7-highspeed: true
-  deepseek-v4-pro: true
-  deepseek-v4-flash: true
-  deepseek-v4-flash-aliyun: true
-  mimo-v2.5-pro: true
-  mimo-v2.5: true
-  LongCat-2.0-Preview: true
+  MiniMax-M3: true
+  glm-latest: true
+  ark-code-latest: true
+  deepseek-v4-flash-aliyun: false
+  mimo-v2.6-pro: true
+  mimo-v2.6-flash: true
+  LongCat-2.0: false
+  Qwen3.8-27B: true
 plans:
   ark:
     channels:
-    - doubao-seed-2-0-pro
-    - deepseek-v4-pro
-    - deepseek-v4-flash
+    - glm-latest
+    - ark-code-latest
   minimax:
     channels:
-    - MiniMax-M2.7-highspeed
+    - MiniMax-M3
   xiaomi:
     channels:
-    - mimo-v2.5-pro
-    - mimo-v2.5
+    - mimo-v2.6-pro
+    - mimo-v2.6-flash
   longcat:
     channels:
-    - LongCat-2.0-Preview
+    - LongCat-2.0
   aliyuncs:
     channels:
     - deepseek-v4-flash-aliyun
+  soloagilab:
+    channels:
+    - Qwen3.8-27B

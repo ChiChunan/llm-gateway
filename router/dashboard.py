@@ -11,12 +11,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>LLM Gateway Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
 <style>
 :root {
-  --bg: #0f172a; --card: #1e293b; --border: #334155;
-  --text: #e2e8f0; --muted: #94a3b8; --accent: #3b82f6;
-  --green: #22c55e; --amber: #f59e0b; --red: #ef4444; --purple: #a855f7;
+  --bg: #f0f4f8; --card: #ffffff; --card-hover: #f8fafc; --border: #e2e8f0;
+  --text: #1e293b; --muted: #64748b; --accent: #3b82f6;
+  --green: #10b981; --amber: #f59e0b; --red: #ef4444; --purple: #8b5cf6;
   --cyan: #06b6d4; --pink: #ec4899;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-md: 0 4px 14px rgba(0,0,0,0.08);
+  --radius: 12px;
+  --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; -webkit-text-size-adjust: 100%; }
@@ -24,8 +29,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 /* Header */
 .header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: var(--bg); z-index: 10; }
 .header h1 { font-size: 18px; font-weight: 600; }
-.header .refresh { background: var(--accent); color: #fff; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap; }
-.header .refresh:active { opacity: 0.7; }
+.header .refresh { background: var(--accent); color: #fff; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; transition: background var(--transition), transform var(--transition); }
+.header .refresh:hover { background: #2563eb; }
+.header .refresh:active { transform: scale(0.97); }
+.header .refresh .icon { display: inline-block; transition: transform 0.6s ease; }
+.header .refresh.spinning .icon { transform: rotate(360deg); }
 
 /* Container */
 .container { max-width: 1280px; margin: 0 auto; padding: 16px; }
@@ -37,58 +45,65 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
 
-/* Stats cards */
-.stats-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 0; }
+/* Stat cards */
+.stats-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 0; align-items: stretch; }
 @media (min-width: 768px) {
   .stats-row { grid-template-columns: repeat(4, 1fr); }
 }
-.stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.stat-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; position: relative; overflow: hidden; height: 100px; display: flex; flex-direction: column; justify-content: center; transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition); }
+.stat-card:hover { transform: translateY(-2px); border-color: var(--accent); box-shadow: var(--shadow-md); }
+.stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--accent); opacity: 0.7; }
+.stat-card:nth-child(2)::before { background: var(--green); }
+.stat-card:nth-child(3)::before { background: var(--amber); }
+.stat-card:nth-child(4)::before { background: var(--purple); }
 .stat-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
-.stat-card .value { font-size: 24px; font-weight: 700; }
+.stat-card .value { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-card .trend { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.stat-card .trend.up { color: var(--green); }
+.stat-card .trend.down { color: var(--red); }
 .stat-card .value.blue { color: var(--accent); }
 .stat-card .value.green { color: var(--green); }
 .stat-card .value.amber { color: var(--amber); }
 .stat-card .value.purple { color: var(--purple); }
 
 /* Bar chart (CSS only) */
-.chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; }
-.chart-card h3 { font-size: 13px; color: var(--muted); margin-bottom: 12px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.chart-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; height: 360px; transition: border-color var(--transition); }
+@media (max-width: 767px) {
+  .chart-card { height: 320px; }
+}
+.chart-card:hover { border-color: var(--accent); }
+.chart-card h3 { font-size: 13px; color: var(--text); margin-bottom: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
 .bar-group { margin-bottom: 10px; }
 .bar-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 12px; }
-.bar-label .name { color: var(--text); max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar-label .val { color: var(--muted); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; }
+.bar-label .name { color: var(--text); max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.bar-label .val { color: var(--muted); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
 .bar-track { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
-.bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; min-width: 2px; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease, filter var(--transition); min-width: 2px; }
+.bar-group:hover .bar-fill { filter: brightness(1.15); }
 
 /* Chart content area */
 .chart-scroll {
-  overflow-y: auto;
-  overflow-x: hidden;
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
+  /* 标准 CSS 滚动条属性（Firefox + Chrome 121+） */
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) var(--border);
 }
-@media (max-width: 767px) {
-  .chart-scroll {
-    height: 290px;
-  }
-}
-.chart-scroll::-webkit-scrollbar { width: 4px; }
-.chart-scroll::-webkit-scrollbar-track { background: transparent; }
-.chart-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-.chart-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+.chart-scroll::-webkit-scrollbar { width: 10px; }
+.chart-scroll::-webkit-scrollbar-track { background: var(--border); border-radius: 5px; }
+.chart-scroll::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 5px; border: 2px solid var(--card); min-height: 30px; }
+.chart-scroll::-webkit-scrollbar-thumb:hover { background: #1d4ed8; }
 
 /* Scrollable table area */
 .table-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: auto;
-  max-height: 400px;
   padding-right: 4px;
-}
-@media (max-width: 767px) {
-  .table-scroll {
-    max-height: 320px;
-  }
 }
 .table-scroll::-webkit-scrollbar { height: 4px; width: 4px; }
 .table-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -110,29 +125,38 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
 /* Day buttons */
 .day-btns { display: flex; gap: 4px; }
-.day-btn { background: var(--border); border: none; color: var(--muted); padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; -webkit-tap-highlight-color: transparent; }
+.day-btn { background: var(--border); border: none; color: var(--muted); padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; -webkit-tap-highlight-color: transparent; transition: background var(--transition), color var(--transition); }
+.day-btn:hover { color: var(--text); }
 .day-btn.active { background: var(--accent); color: #fff; }
 
 /* Model table */
-.table-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow: hidden; display: flex; flex-direction: column; }
-.table-card h3 { font-size: 13px; color: var(--muted); margin-bottom: 12px; font-weight: 500; flex-shrink: 0; }
+.table-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; overflow: hidden; display: flex; flex-direction: column; height: 420px; transition: border-color var(--transition); }
+@media (max-width: 767px) {
+  .table-card { height: 360px; }
+}
+.table-card:hover { border-color: var(--accent); }
+.table-card h3 { font-size: 13px; color: var(--text); margin-bottom: 12px; font-weight: 600; flex-shrink: 0; }
 table { width: 100%; border-collapse: collapse; }
-th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
-td { padding: 10px; font-size: 13px; border-bottom: 1px solid var(--border); }
+th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; position: sticky; top: 0; background: var(--card); z-index: 1; }
+td { padding: 10px; font-size: 13px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+td.right { text-align: right; }
+tbody tr { transition: background var(--transition); }
+tbody tr:hover { background: rgba(59,130,246,0.05); }
 tr:last-child td { border-bottom: none; }
 .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
-.badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
-.badge.ark { background: #1e3a5f; color: #60a5fa; }
-.badge.kimi { background: #3b1f4a; color: #c084fc; }
-.badge.minimax { background: #1a3d2e; color: #4ade80; }
-.badge.deepseek { background: #1a2e3d; color: #38bdf8; }
-.badge.xiaomi { background: #3d1a1a; color: #f87171; }
-.badge.longcat { background: #2d2a1a; color: #fbbf24; }
-.badge.aliyuncs { background: #2a1a3d; color: #e879f9; }
-.badge.dashscope { background: #2a1a3d; color: #e879f9; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; }
+.badge.ark { background: #eff6ff; color: #2563eb; }
+.badge.kimi { background: #f5f3ff; color: #7c3aed; }
+.badge.minimax { background: #ecfdf5; color: #059669; }
+.badge.deepseek { background: #eff6ff; color: #1d4ed8; }
+.badge.xiaomi { background: #fef2f2; color: #dc2626; }
+.badge.longcat { background: #fffbeb; color: #d97706; }
+.badge.aliyuncs { background: #f5f3ff; color: #7c3aed; }
+.badge.dashscope { background: #f5f3ff; color: #7c3aed; }
 
 /* Provider config cards */
-.config-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.config-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition); }
+.config-card:hover { transform: translateY(-2px); border-color: var(--accent); box-shadow: var(--shadow-md); }
 .config-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
 .config-card-provider { font-weight:600; font-size:14px; color:var(--accent); text-transform:capitalize; }
 .config-card-badge { font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; }
@@ -140,16 +164,19 @@ tr:last-child td { border-bottom: none; }
 .config-card-badge.warn { background:#3d2a1a; color:#fb923c; }
 .config-card-models { display:flex; flex-direction:column; gap:6px; }
 .config-model-row { display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:rgba(255,255,255,0.03); border-radius:6px; }
-.config-model-info { display:flex; align-items:center; gap:8px; min-width:0; }
+.config-model-info { display:flex; align-items:center; gap:8px; min-width:0; flex:1; }
 .config-model-name { font-family:'SF Mono','Fira Code',monospace; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:130px; }
 .config-status-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .config-status-dot.on { background:var(--green); }
 .config-status-dot.off { background:var(--red); }
 
-/* Toggle button */
-.toggle-btn { color:#fff; border:none; padding:4px 10px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:600; -webkit-tap-highlight-color:transparent; transition:opacity 0.15s; }
-.toggle-btn:hover { opacity:0.8; }
-.toggle-btn:active { opacity:0.6; }
+/* Toggle switch */
+.toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--border); border-radius: 20px; transition: 0.2s; }
+.toggle-slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 2px; bottom: 2px; background: #fff; border-radius: 50%; transition: 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+.toggle-switch input:checked + .toggle-slider { background: var(--green); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); }
 
 /* Loading */
 .loading { text-align: center; padding: 40px; color: var(--muted); font-size: 14px; }
@@ -162,15 +189,54 @@ tr:last-child td { border-bottom: none; }
 
 /* Two-column layout for charts on desktop */
 @media (min-width: 768px) {
-  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
   .charts-row .chart-card { margin-bottom: 0; }
+}
+
+/* Tab pane fade-in */
+.tab-pane { animation: fadeIn 0.25s ease; }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Stat-card staggered entrance (one-shot on page load) */
+.stat-card { animation: slideUp 0.4s ease both; }
+.stat-card:nth-child(1) { animation-delay: 0.05s; }
+.stat-card:nth-child(2) { animation-delay: 0.10s; }
+.stat-card:nth-child(3) { animation-delay: 0.15s; }
+.stat-card:nth-child(4) { animation-delay: 0.20s; }
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Logs row hover (for the recent-requests card) */
+.log-row { transition: background var(--transition); }
+.log-row:hover { background: rgba(59,130,246,0.06); }
+.log-row .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.log-row .status-dot.ok { background: var(--green); }
+.log-row .status-dot.err { background: var(--red); }
+
+/* Honor user motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 </style>
 </head>
 <body>
 <div class="header">
-  <h1>🤖 LLM Gateway</h1>
-  <button class="refresh" onclick="loadAll(); loadModels();">↻ 刷新</button>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <h1>🤖 LLM Gateway</h1>
+    <span id="lastUpdate" style="font-size:11px;color:var(--muted);"></span>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span id="refreshStatus" style="font-size:11px;color:var(--muted);"></span>
+    <button class="refresh" id="refreshBtn" onclick="refreshAll()"><span class="icon">↻</span><span>刷新</span></button>
+  </div>
 </div>
 <div class="container">
   <div class="tab-nav">
@@ -181,10 +247,10 @@ tr:last-child td { border-bottom: none; }
   <div id="tab-overview" class="tab-pane active">
     <div class="overview-sections">
     <div class="stats-row" id="statsRow">
-      <div class="stat-card"><div class="label">总请求数</div><div class="value blue" id="totalReqs">-</div></div>
-      <div class="stat-card"><div class="label">输入 Tokens</div><div class="value green" id="totalPrompt">-</div></div>
-      <div class="stat-card"><div class="label">输出 Tokens</div><div class="value amber" id="totalComp">-</div></div>
-      <div class="stat-card"><div class="label">缓存命中</div><div class="value purple" id="totalCached">-</div></div>
+      <div class="stat-card"><div class="label">近30天请求数</div><div class="value blue" id="totalReqs">-</div></div>
+      <div class="stat-card"><div class="label">近30天输入 Tokens</div><div class="value green" id="totalPrompt">-</div></div>
+      <div class="stat-card"><div class="label">近30天输出 Tokens</div><div class="value amber" id="totalComp">-</div></div>
+      <div class="stat-card"><div class="label">近30天缓存命中</div><div class="value purple" id="totalCached">-</div></div>
     </div>
 
     <div class="charts-row">
@@ -259,32 +325,66 @@ function fmtTime(iso) {
 }
 function getColor(key) {
   const m = {
-    'deepseek-v4-pro': '#3b82f6', 'deepseek-v4-flash': '#60a5fa',
-    'doubao-seed-2-0-pro': '#06b6d4', 'doubao-seed-2-0-lite': '#67e8f9',
-    'MiniMax-M2.7-highspeed': '#22c55e', 'mimo-v2.5-pro': '#f59e0b',
-    'mimo-v2.5': '#f87171', 'LongCat-Flash-Lite': '#a855f7',
-    'LongCat-2.0-Preview': '#c084fc', 'LongCat-Flash-Chat': '#fbbf24',
-    'glm-5-1': '#60a5fa', 'kimi-for-coding': '#ec4899',
+    'glm-latest': '#3b82f6', 'ark-code-latest': '#93c5fd',
+    'doubao-seed-2-0-lite': '#67e8f9',
+    'MiniMax-M2.7-highspeed': '#34d399', 'mimo-v2.6-pro': '#fbbf24',
+    'mimo-v2.6-flash': '#f87171', 'LongCat-Flash-Lite': '#a78bfa',
+    'LongCat-2.0': '#c4b5fd', 'LongCat-Flash-Chat': '#fcd34d',
+    'glm-5-1': '#60a5fa', 'kimi-for-coding': '#f472b6',
+    'MiniMax-M3': '#6ee7b7',
+    'Qwen3.8-27B': '#8b5cf6',  // 紫色，区分其他模型
   };
-  return m[key] || '#64748b';
+  return m[key] || '#cbd5e1';
 }
 
 async function fetchJSON(url) {
-  const r = await fetch(url);
+  const headers = { 'Content-Type': 'application/json' };
+  // 任何调用都默认带 API key（公开路径 server 端会跳过认证，不会报错）
+  headers['Authorization'] = 'Bearer ' + getApiKey();
+  const r = await fetch(url, { headers });
+  if (!r.ok) {
+    // 认证失败时返回空 data，让 loadXxx 走"暂无数据"分支
+    if (r.status === 401) return { data: [] };
+    throw new Error(`HTTP ${r.status}`);
+  }
   return r.json();
 }
 
 // ─── Stats ───
+function pctTrend(curr, prev) {
+  if (!prev || prev === 0) return '';
+  const pct = ((curr - prev) / prev * 100).toFixed(0);
+  const cls = pct >= 0 ? 'up' : 'down';
+  const sign = pct >= 0 ? '+' : '';
+  return `<span class="trend ${cls}">今日vs昨日 ${sign}${pct}%</span>`;
+}
+
 async function loadStats() {
-  const [totals, summary] = await Promise.all([
-    fetchJSON('/api/stats/totals'),
-    fetchJSON('/api/stats/summary')
+  // 累计 = 近 30 天滚动窗口；趋势 = 今天 vs 昨天（精确单日）
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const [totals, summary, todayStats, yesterdayStats] = await Promise.all([
+    fetchJSON('/api/stats/totals?days=30'),
+    fetchJSON('/api/stats/summary'),
+    fetchJSON('/api/stats/totals?date=' + today).catch(() => null),
+    fetchJSON('/api/stats/totals?date=' + yesterday).catch(() => null),
   ]);
   const t = totals.data || {};
+  document.getElementById('totalReqs').parentElement.querySelector('.trend')?.remove();
+  document.getElementById('totalPrompt').parentElement.querySelector('.trend')?.remove();
+  document.getElementById('totalComp').parentElement.querySelector('.trend')?.remove();
+  document.getElementById('totalCached').parentElement.querySelector('.trend')?.remove();
   document.getElementById('totalReqs').textContent = fmt(t.total_requests || 0);
   document.getElementById('totalPrompt').textContent = fmt(t.total_prompt_tokens || 0);
   document.getElementById('totalComp').textContent = fmt(t.total_completion_tokens || 0);
   document.getElementById('totalCached').textContent = fmt(t.total_cached_tokens || 0);
+  // 趋势：今天 vs 昨天
+  const td = todayStats ? (todayStats.data || {}) : {};
+  const yd = yesterdayStats ? (yesterdayStats.data || {}) : {};
+  for (const [id, val, prev] of [['totalReqs', td.total_requests, yd.total_requests], ['totalPrompt', td.total_prompt_tokens, yd.total_prompt_tokens], ['totalComp', td.total_completion_tokens, yd.total_completion_tokens], ['totalCached', td.total_cached_tokens, yd.total_cached_tokens]]) {
+    const el = document.getElementById(id);
+    if (el) el.insertAdjacentHTML('afterend', pctTrend(val || 0, prev || 0));
+  }
 
   const tbody = document.getElementById('modelTable');
   tbody.innerHTML = '';
@@ -293,14 +393,16 @@ async function loadStats() {
     const ch = r.grp_channel || r.channel || '';
     const chBadge = ch ? `<span class="badge ${ch}">${ch}</span>` : '-';
     const model = r.grp_model || r.grp || r.model || '-';
+    const lat = r.avg_latency_ms || 0;
+    const latCls = lat < 8000 ? 'green' : lat < 15000 ? 'amber' : 'red';
     tbody.innerHTML += `<tr>
       <td class="mono">${model}</td>
       <td>${chBadge}</td>
-      <td class="mono">${fmt(r.request_count)}</td>
-      <td class="mono">${fmt(r.total_prompt_tokens)}</td>
-      <td class="mono">${fmt(r.total_completion_tokens)}</td>
-      <td class="mono">${fmt(r.total_cached_tokens)}</td>
-      <td class="mono">${fmtMs(r.avg_latency_ms)}</td>
+      <td class="mono right">${fmt(r.request_count)}</td>
+      <td class="mono right">${fmt(r.total_prompt_tokens)}</td>
+      <td class="mono right">${fmt(r.total_completion_tokens)}</td>
+      <td class="mono right">${fmt(r.total_cached_tokens)}</td>
+      <td class="mono right" style="color:var(--${latCls})">${fmtMs(lat)}</td>
     </tr>`;
   }
 }
@@ -466,9 +568,9 @@ async function loadTokenChart(days) {
         </div>
       </div>
       <div style="display:flex;gap:12px;margin-top:2px;font-size:10px;color:var(--muted);">
-        <span>🟣 缓存 ${showCached}</span>
-        <span>🟢 输入 ${fmt(nonCached)}</span>
-        <span>🟡 输出 ${fmt(comp)}</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#7c3aed;vertical-align:middle;margin-right:3px;"></span>缓存 ${showCached}</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#059669;vertical-align:middle;margin-right:3px;"></span>输入 ${fmt(nonCached)}</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#d97706;vertical-align:middle;margin-right:3px;"></span>输出 ${fmt(comp)}</span>
       </div>
     </div>`;
   }
@@ -482,26 +584,29 @@ async function loadLogs() {
   const container = document.getElementById('logsList');
   if (!rows.length) { container.innerHTML = '<div class="loading">暂无数据</div>'; return; }
 
-  // 表头
-  const headerHTML = `<div style="display:grid;grid-template-columns:18% 24% 10% 14% 14% 20%;gap:4px;padding:6px 10px 8px;border-bottom:2px solid var(--border);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">
+  const headerHTML = `<div style="display:grid;grid-template-columns:18% 24% 10% 14% 14% 20%;gap:4px;padding:6px 10px 8px;border-bottom:2px solid var(--border);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;position:sticky;top:0;background:var(--card);z-index:1;">
     <span>时间</span>
     <span>模型</span>
     <span>渠道</span>
-    <span style="text-align:right;">输入</span>
-    <span style="text-align:right;">输出</span>
-    <span style="text-align:right;">延迟</span>
+    <span class="right">输入</span>
+    <span class="right">输出</span>
+    <span class="right">延迟</span>
   </div>`;
 
-  // 数据行
   const rowsHTML = rows.map(r => {
     const ch = r.channel || '';
-    return `<div style="display:grid;grid-template-columns:18% 24% 10% 14% 14% 20%;gap:4px;padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;">
-      <span style="color:var(--muted)">${fmtTime(r.timestamp)}</span>
+    const sc = r.status_code;
+    const statusCls = (sc === 200 || sc === 201) ? 'ok' : 'err';
+    const statusTip = sc ? `HTTP ${sc}` : '';
+    const lat = r.latency_ms || 0;
+    const latCls = lat < 8000 ? 'green' : lat < 15000 ? 'amber' : 'red';
+    return `<div class="log-row" style="display:grid;grid-template-columns:18% 24% 10% 14% 14% 20%;gap:4px;padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;">
+      <span style="color:var(--muted)"><span class="status-dot ${statusCls}" title="${statusTip}"></span>${fmtTime(r.timestamp)}</span>
       <span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.model || ''}">${r.model || '-'}</span>
       <span class="badge ${ch}" style="display:inline-block;width:fit-content;">${ch}</span>
-      <span class="mono" style="text-align:right;">${fmt(r.prompt_tokens)}</span>
-      <span class="mono" style="text-align:right;">${fmt(r.completion_tokens)}</span>
-      <span class="mono" style="text-align:right;">${fmtMs(r.latency_ms)}</span>
+      <span class="mono right">${fmt(r.prompt_tokens)}</span>
+      <span class="mono right">${fmt(r.completion_tokens)}</span>
+      <span class="mono right" style="color:var(--${latCls})">${fmtMs(lat)}</span>
     </div>`;
   }).join('');
 
@@ -515,15 +620,16 @@ function getApiKey() {
 
 // Provider brand colors
 const PROVIDER_COLORS = {
-  ark:      { bg: '#1e3a5f', fg: '#60a5fa' },
-  minimax:  { bg: '#1a3d2e', fg: '#4ade80' },
-  longcat:  { bg: '#2d2a1a', fg: '#fbbf24' },
-  xiaomi:   { bg: '#3d1a1a', fg: '#f87171' },
-  deepseek: { bg: '#1a2e3d', fg: '#38bdf8' },
-  kimi:     { bg: '#3b1f4a', fg: '#c084fc' },
-  aliyuncs: { bg: '#2a1a3d', fg: '#e879f9' },
+  ark:      { bg: '#eff6ff', fg: '#2563eb' },
+  minimax:  { bg: '#ecfdf5', fg: '#059669' },
+  longcat:  { bg: '#fffbeb', fg: '#d97706' },
+  xiaomi:   { bg: '#fef2f2', fg: '#dc2626' },
+  deepseek: { bg: '#eff6ff', fg: '#1d4ed8' },
+  kimi:     { bg: '#f5f3ff', fg: '#7c3aed' },
+  aliyuncs: { bg: '#f5f3ff', fg: '#7c3aed' },
+  soloagilab: { bg: '#ede9fe', fg: '#6d28d9' },  // 紫色系，soloagilab channel
 };
-const DEFAULT_COLOR = { bg: '#1e293b', fg: '#94a3b8' };
+const DEFAULT_COLOR = { bg: '#e5e7eb', fg: '#6b7280' };
 
 function providerColor(name) {
   return PROVIDER_COLORS[name] || DEFAULT_COLOR;
@@ -537,7 +643,7 @@ async function loadModels() {
   const data = await resp.json();
   const modelsByProvider = data.data || {};
   const entries = Object.entries(modelsByProvider);
-  // 同时拉 Codex 额度
+  // 同时拉 Codex 额度（公开路径无需 auth，401 时静默降级）
   let codexHTML = '';
   try {
     const cr = await fetch('/quota/codex');
@@ -589,14 +695,15 @@ async function loadModels() {
     let modelsHTML = '';
     for (const m of models) {
       const dotClass = m.enabled ? 'on' : 'off';
-      const btnLabel = m.enabled ? '关闭' : '开启';
-      const btnColor = m.enabled ? 'var(--red)' : 'var(--green)';
       modelsHTML += `<div class="config-model-row">
         <div class="config-model-info">
           <span class="config-status-dot ${dotClass}"></span>
           <span class="config-model-name" title="${m.name}">${m.name}</span>
         </div>
-        <button class="toggle-btn" style="background:${btnColor}" onclick="toggleModel(\'${m.name.replace(/\'/g,"\\\\\'")}\',${!m.enabled})">${btnLabel}</button>
+        <label class="toggle-switch">
+          <input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${m.name.replace(/'/g,"\\'")}', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
       </div>`;
     }
     html += `<div class="config-card">
@@ -707,10 +814,34 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+async function refreshAll() {
+  const btn = document.getElementById('refreshBtn');
+  const statusEl = document.getElementById('refreshStatus');
+  btn.classList.add('spinning');
+  btn.disabled = true;
+  statusEl.textContent = '刷新中...';
+  statusEl.style.color = 'var(--accent)';
+  try {
+    await loadAll();
+    await loadModels();
+    const now = new Date();
+    document.getElementById('lastUpdate').textContent = '更新于 ' + now.toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    statusEl.textContent = '✓ 已刷新';
+    statusEl.style.color = 'var(--green)';
+  } catch(e) {
+    console.error(e);
+    statusEl.textContent = '✗ 刷新失败';
+    statusEl.style.color = 'var(--red)';
+  }
+  setTimeout(() => { btn.classList.remove('spinning'); btn.disabled = false; statusEl.textContent = ''; }, 800);
+}
+
 async function loadAll() {
   document.getElementById('totalReqs').textContent = '...';
   try {
     await Promise.all([loadStats(), loadDaily(7), loadTokenChart(7), loadLogs(), loadModels()]);
+    const now = new Date();
+    document.getElementById('lastUpdate').textContent = '更新于 ' + now.toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
   } catch(e) { console.error(e); }
 }
 

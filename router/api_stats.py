@@ -98,10 +98,12 @@ async def stats_roles(since: Optional[str] = None, until: Optional[str] = None):
 
 
 @router.get("/totals")
-async def stats_totals():
-    """Lifetime totals."""
+async def stats_totals(days: int | None = None, date: str | None = None):
+    """Lifetime totals, last N days if days is set, or a single date if date is set (YYYY-MM-DD)."""
     db = get_usage_db()
-    return {"data": db.get_total_stats()}
+    if date:
+        return {"data": db.get_total_stats(date=date)}
+    return {"data": db.get_total_stats(days=days)}
 
 
 # ─── Config Router (model switches only) ─────────────────────────────────────

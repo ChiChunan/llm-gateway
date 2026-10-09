@@ -82,12 +82,12 @@ def test_handle_429_with_default_ban():
 
 def make_manager_with_plans():
     plans = {
-        "ark": {"channels": ["doubao-seed-2-0-pro", "glm-5-1"]},
+        "ark": {"channels": ["ark-code-latest", "glm-5-1"]},
         "kimi": {"channels": ["kimi-for-coding"]},
-        "minimax": {"channels": ["MiniMax-M2.7-highspeed"]},
+        "minimax": {"channels": ["MiniMax-M3"]},
     }
     return ChannelManager(
-        channels=["doubao-seed-2-0-pro", "glm-5-1", "kimi-for-coding", "MiniMax-M2.7-highspeed"],
+        channels=["ark-code-latest", "glm-5-1", "kimi-for-coding", "MiniMax-M3"],
         plans=plans,
     )
 
@@ -96,15 +96,15 @@ def test_handle_429_marks_entire_plan_unavailable():
     msg = "You have exceeded the 5-hour usage quota. It will reset at 2026-04-23 17:01:14 +0800 CST."
     mgr.handle_429("glm-5-1", msg)
     assert mgr.is_available("glm-5-1") is False
-    assert mgr.is_available("doubao-seed-2-0-pro") is False
+    assert mgr.is_available("ark-code-latest") is False
     assert mgr.is_available("kimi-for-coding") is True
-    assert mgr.is_available("MiniMax-M2.7-highspeed") is True
+    assert mgr.is_available("MiniMax-M3") is True
 
 def test_handle_429_same_reset_time_for_plan():
     mgr = make_manager_with_plans()
     msg = "You have exceeded the 5-hour usage quota. It will reset at 2026-04-23 17:01:14 +0800 CST."
-    mgr.handle_429("doubao-seed-2-0-pro", msg)
-    t1 = mgr._status["doubao-seed-2-0-pro"]
+    mgr.handle_429("ark-code-latest", msg)
+    t1 = mgr._status["ark-code-latest"]
     t2 = mgr._status["glm-5-1"]
     assert t1 == t2
 

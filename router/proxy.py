@@ -39,8 +39,11 @@ def build_forwarded_request(original: dict, target_model: str) -> dict:
         "deepseek-v4-flash-aliyun": "deepseek-v4-flash",
     }
     payload = {**original, "model": _model_name_map.get(target_model, target_model)}
-    if target_model.startswith("doubao"):
+    if target_model.startswith("doubao") or target_model == "ark-code-latest":
         payload.setdefault("reasoning_effort", "minimal")
+    elif target_model == "glm-latest":
+        # ARK glm-latest 换版后不再支持 reasoning_effort=none/minimal，只支持 low 及以上（2026-10-09 实测）
+        payload.setdefault("reasoning_effort", "low")
     elif target_model.startswith("glm") or get_channel_for_model(target_model) == "kimi":
         payload.setdefault("thinking", {"type": "disabled"})
     elif target_model.startswith("deepseek") or target_model == "deepseek-v4-flash-aliyun":
@@ -82,6 +85,9 @@ def _normalize_usage(usage: dict) -> dict:
     prompt = usage.get("prompt_tokens", 0) or 0
     completion = usage.get("completion_tokens", 0) or 0
     cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
+    # reasoning_tokens 是 thinking 模型额外计费的内部思考 token（OpenAI 规范字段）
+    # 单独记录便于观测 thinking 模型（LongCat 2.0 等）对 max_tokens 预算的占用
+    reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens", 0) or 0
     # MiniMax 非标准：cached > prompt 说明 prompt_tokens 仅为未命中部分
     if cached > prompt:
         prompt = prompt + cached
@@ -89,6 +95,7 @@ def _normalize_usage(usage: dict) -> dict:
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         "cached_tokens": cached,
+        "reasoning_tokens": reasoning,
     }
 
 
@@ -180,7 +187,12 @@ async def _stream_response(
                     body_bytes = await resp.aread()
                     if on_error is not None:
                         await on_error(resp.status_code, body_bytes.decode(errors="replace"))
-                    logging.warning(f"PROXY stream upstream {resp.status_code}: model={target_model} channel={channel} body={body_bytes[:300]}")
+                    # 脱敏：避免日志泄露用户 prompt/response 内容，只记录长度+状态码
+                    logging.warning(
+                        f"PROXY stream upstream {resp.status_code}: "
+                        f"model={target_model} channel={channel} "
+                        f"body_len={len(body_bytes)}"
+                    )
                     err = _json.dumps({"error": "upstream error", "status": resp.status_code})
                     if output_format == "anthropic":
                         yield f"event: error\ndata: {err}\n\n".encode("utf-8")
@@ -216,6 +228,7 @@ async def _stream_response(
                     prompt_tokens=accumulated_usage["prompt_tokens"],
                     completion_tokens=accumulated_usage["completion_tokens"],
                     cached_tokens=accumulated_usage["cached_tokens"],
+                    reasoning_tokens=accumulated_usage.get("reasoning_tokens", 0),
                     status_code=final_status, latency_ms=latency,
                 )
             else:
@@ -265,6 +278,7 @@ async def _json_response(
             prompt_tokens=u["prompt_tokens"],
             completion_tokens=u["completion_tokens"],
             cached_tokens=u["cached_tokens"],
+            reasoning_tokens=u.get("reasoning_tokens", 0),
             status_code=resp.status_code, latency_ms=latency,
         )
     else:

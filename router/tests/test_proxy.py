@@ -8,8 +8,8 @@ def test_build_forwarded_request_replaces_model():
         "messages": [{"role": "user", "content": "hello"}],
         "stream": True,
     }
-    result = build_forwarded_request(original, target_model="doubao-seed-2-0-pro")
-    assert result["model"] == "doubao-seed-2-0-pro"
+    result = build_forwarded_request(original, target_model="ark-code-latest")
+    assert result["model"] == "ark-code-latest"
     assert result["messages"] == original["messages"]
     assert result["stream"] is True
 
@@ -22,14 +22,14 @@ def test_build_forwarded_request_preserves_other_fields():
         "max_tokens": 1000,
     }
     # 非 MiniMax 模型，max_tokens 原样保留
-    result = build_forwarded_request(original, target_model="doubao-seed-2-0-pro")
+    result = build_forwarded_request(original, target_model="ark-code-latest")
     assert result["temperature"] == 0.7
     assert result["max_tokens"] == 1000
 
 
 def test_build_forwarded_request_minimax_bumps_max_tokens():
     original = {"model": "auto", "messages": [], "max_tokens": 1000}
-    result = build_forwarded_request(original, target_model="MiniMax-M2.7-highspeed")
+    result = build_forwarded_request(original, target_model="MiniMax-M3")
     assert result["max_tokens"] == 8192
 
 
@@ -38,7 +38,7 @@ def test_extract_channel_from_model_ark_lite():
 
 
 def test_extract_channel_from_model_ark_pro():
-    assert extract_channel_from_model("doubao-seed-2-0-pro") == "ark"
+    assert extract_channel_from_model("ark-code-latest") == "ark"
 
 
 def test_extract_channel_from_model_ark_glm():
@@ -50,7 +50,7 @@ def test_extract_channel_from_model_kimi():
 
 
 def test_extract_channel_from_model_minimax():
-    assert extract_channel_from_model("MiniMax-M2.7-highspeed") == "minimax"
+    assert extract_channel_from_model("MiniMax-M3") == "minimax"
 
 
 def test_extract_channel_from_model_unknown():

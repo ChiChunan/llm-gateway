@@ -56,6 +56,7 @@ class UsageDB:
                     prompt_tokens INTEGER DEFAULT 0,
                     completion_tokens INTEGER DEFAULT 0,
                     cached_tokens INTEGER DEFAULT 0,
+                    reasoning_tokens INTEGER DEFAULT 0,
                     request_id TEXT,
                     status_code INTEGER,
                     latency_ms INTEGER
@@ -69,11 +70,14 @@ class UsageDB:
                 CREATE INDEX IF NOT EXISTS idx_usage_model
                 ON usage_logs(model)
             """)
-        # 兼容旧表：在独立事务中添加 role 列，避免异常污染主事务
+        # 兼容旧表：在独立事务中添加缺失列，避免异常污染主事务
         existing = {row[1] for row in self._get_conn().execute("PRAGMA table_info(usage_logs)").fetchall()}
         if "role" not in existing:
             with self._conn() as conn:
                 conn.execute("ALTER TABLE usage_logs ADD COLUMN role TEXT DEFAULT 'unknown'")
+        if "reasoning_tokens" not in existing:
+            with self._conn() as conn:
+                conn.execute("ALTER TABLE usage_logs ADD COLUMN reasoning_tokens INTEGER DEFAULT 0")
 
     def record(
         self,
@@ -83,6 +87,7 @@ class UsageDB:
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         cached_tokens: int = 0,
+        reasoning_tokens: int = 0,
         request_id: str | None = None,
         status_code: int = 200,
         latency_ms: int | None = None,
@@ -92,8 +97,8 @@ class UsageDB:
             conn.execute(
                 """INSERT INTO usage_logs
                    (timestamp, model, channel, role, prompt_tokens, completion_tokens,
-                    cached_tokens, request_id, status_code, latency_ms)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    cached_tokens, reasoning_tokens, request_id, status_code, latency_ms)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     _now_iso(),
                     model,
@@ -102,6 +107,7 @@ class UsageDB:
                     prompt_tokens,
                     completion_tokens,
                     cached_tokens,
+                    reasoning_tokens,
                     request_id,
                     status_code,
                     latency_ms,
@@ -126,6 +132,14 @@ class UsageDB:
             since = (datetime.now(CST) - timedelta(days=7)).isoformat()
         if until is None:
             until = datetime.now(CST).isoformat()
+
+        # 深度防御：白名单 group_by，防止 SQL 注入（API 层有 regex，但底层再校验一次）
+        _ALLOWED_GROUP_BY = {"model", "channel"}
+        if group_by not in _ALLOWED_GROUP_BY:
+            group_by = "model"
+        # 深度防御：限制 role_filter 长度，避免恶意超长字符串
+        if role_filter is not None and len(role_filter) > 64:
+            role_filter = None
 
         with self._conn() as conn:
             # role_filter 处理：
@@ -286,20 +300,48 @@ class UsageDB:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def get_total_stats(self) -> dict:
-        """Get overall lifetime stats (excluding classifier requests)."""
+    def get_total_stats(self, days: int | None = None, date: str | None = None) -> dict:
+        """Get overall stats. days=N for last N days, date='YYYY-MM-DD' for a single day."""
         with self._conn() as conn:
-            row = conn.execute(
-                """
-                SELECT
-                    COUNT(*) as total_requests,
-                    SUM(prompt_tokens) as total_prompt_tokens,
-                    SUM(completion_tokens) as total_completion_tokens,
-                    SUM(cached_tokens) as total_cached_tokens
-                FROM usage_logs
-                WHERE role != 'classifier'
-                """
-            ).fetchone()
+            if date:
+                row = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) as total_requests,
+                        SUM(prompt_tokens) as total_prompt_tokens,
+                        SUM(completion_tokens) as total_completion_tokens,
+                        SUM(cached_tokens) as total_cached_tokens
+                    FROM usage_logs
+                    WHERE role != 'classifier' AND date(timestamp) = ?
+                    """,
+                    (date,),
+                ).fetchone()
+            elif days:
+                since = (datetime.now() - timedelta(days=days)).isoformat()
+                row = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) as total_requests,
+                        SUM(prompt_tokens) as total_prompt_tokens,
+                        SUM(completion_tokens) as total_completion_tokens,
+                        SUM(cached_tokens) as total_cached_tokens
+                    FROM usage_logs
+                    WHERE role != 'classifier' AND timestamp >= ?
+                    """,
+                    (since,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) as total_requests,
+                        SUM(prompt_tokens) as total_prompt_tokens,
+                        SUM(completion_tokens) as total_completion_tokens,
+                        SUM(cached_tokens) as total_cached_tokens
+                    FROM usage_logs
+                    WHERE role != 'classifier'
+                    """
+                ).fetchone()
             return dict(row) if row else {}
 
 

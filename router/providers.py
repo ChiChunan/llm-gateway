@@ -25,26 +25,27 @@ class ProviderConfig:
 # Model name -> channel identifier
 MODEL_TO_CHANNEL: dict[str, str] = {
     "doubao-seed-2-0-lite": "ark",
-    "doubao-seed-2-0-pro": "ark",
-    "deepseek-v4-pro": "ark",
-    "deepseek-v4-flash": "ark",
+    "glm-latest": "ark",
+    "ark-code-latest": "ark",
     "glm-5-1": "ark",
-    "MiniMax-M2.7-highspeed": "minimax",
-    "mimo-v2.5-pro": "xiaomi",
-    "mimo-v2.5": "xiaomi",
-    "LongCat-2.0-Preview": "longcat",
+    "MiniMax-M3": "minimax",
+    "mimo-v2.6-pro": "xiaomi",
+    "mimo-v2.6-flash": "xiaomi",
+    "LongCat-2.0": "longcat",
     "deepseek-v4-flash-aliyun": "aliyuncs",
-    "deepseek-v4-flash": "ark",
+    "ark-code-latest": "ark",
     "kimi-for-coding": "kimi",
+    "Qwen3.8-27B": "soloagilab",
 }
 
 # Channel -> default model (for /v1/models listing)
 CHANNEL_TO_DEFAULT_MODEL: dict[str, str] = {
-    "ark": "deepseek-v4-pro",
-    "minimax": "MiniMax-M2.7-highspeed",
-    "xiaomi": "mimo-v2.5-pro",
-    "longcat": "LongCat-2.0-Preview",
+    "ark": "glm-latest",
+    "minimax": "MiniMax-M3",
+    "xiaomi": "mimo-v2.6-pro",
+    "longcat": "LongCat-2.0",
     "aliyuncs": "deepseek-v4-flash-aliyun",
+    "soloagilab": "Qwen3.8-27B",
 }
 
 
@@ -118,6 +119,15 @@ def init_providers() -> dict[str, ProviderConfig]:
         providers["aliyuncs"] = ProviderConfig(
             base_url=dashscope_base,
             api_key=dashscope_key,
+        )
+
+    # SoloAgilab Open WebUI (私有部署)
+    soloagilab_key = os.environ.get("SOLOAGILAB_API_KEY", "")
+    soloagilab_base = os.environ.get("SOLOAGILAB_BASE_URL", "https://ui.soloagilab.com/api/v1")
+    if soloagilab_key:
+        providers["soloagilab"] = ProviderConfig(
+            base_url=soloagilab_base,
+            api_key=soloagilab_key,
         )
 
     return providers

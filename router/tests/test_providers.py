@@ -12,10 +12,10 @@ from providers import (
 
 def test_model_to_channel_mapping():
     assert MODEL_TO_CHANNEL["doubao-seed-2-0-lite"] == "ark"
-    assert MODEL_TO_CHANNEL["doubao-seed-2-0-pro"] == "ark"
+    assert MODEL_TO_CHANNEL["ark-code-latest"] == "ark"
     assert MODEL_TO_CHANNEL["glm-5-1"] == "ark"
     assert MODEL_TO_CHANNEL["kimi-for-coding"] == "kimi"
-    assert MODEL_TO_CHANNEL["MiniMax-M2.7-highspeed"] == "minimax"
+    assert MODEL_TO_CHANNEL["MiniMax-M3"] == "minimax"
 
 
 def test_get_channel_for_model():

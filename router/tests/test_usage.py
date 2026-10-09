@@ -20,7 +20,7 @@ def db():
 def test_record_and_totals(db):
     db.record("glm-5-1", "ark", prompt_tokens=100, completion_tokens=50, cached_tokens=20, latency_ms=500)
     db.record("glm-5-1", "ark", prompt_tokens=200, completion_tokens=80, cached_tokens=10, latency_ms=300)
-    db.record("MiniMax-M2.7-highspeed", "minimax", prompt_tokens=30, completion_tokens=10, latency_ms=100)
+    db.record("MiniMax-M3", "minimax", prompt_tokens=30, completion_tokens=10, latency_ms=100)
 
     totals = db.get_total_stats()
     assert totals["total_requests"] == 3
@@ -31,19 +31,19 @@ def test_record_and_totals(db):
 
 def test_summary_group_by_model(db):
     db.record("glm-5-1", "ark", prompt_tokens=100, completion_tokens=50)
-    db.record("MiniMax-M2.7-highspeed", "minimax", prompt_tokens=30, completion_tokens=10)
+    db.record("MiniMax-M3", "minimax", prompt_tokens=30, completion_tokens=10)
 
     summary = db.get_summary(group_by="model")
     assert len(summary) == 2
     models = {r["grp"] for r in summary}
     assert "glm-5-1" in models
-    assert "MiniMax-M2.7-highspeed" in models
+    assert "MiniMax-M3" in models
 
 
 def test_summary_group_by_channel(db):
     db.record("glm-5-1", "ark", prompt_tokens=100)
-    db.record("doubao-seed-2-0-pro", "ark", prompt_tokens=50)
-    db.record("MiniMax-M2.7-highspeed", "minimax", prompt_tokens=30)
+    db.record("ark-code-latest", "ark", prompt_tokens=50)
+    db.record("MiniMax-M3", "minimax", prompt_tokens=30)
 
     summary = db.get_summary(group_by="channel")
     channels = {r["grp"] for r in summary}
@@ -60,14 +60,14 @@ def test_summary_includes_channel_info(db):
 def test_daily_breakdown(db):
     db.record("glm-5-1", "ark", prompt_tokens=100)
     db.record("glm-5-1", "ark", prompt_tokens=50)
-    db.record("MiniMax-M2.7-highspeed", "minimax", prompt_tokens=30)
+    db.record("MiniMax-M3", "minimax", prompt_tokens=30)
 
     daily = db.get_daily()
     assert len(daily) >= 1
     # Both models should appear in today's date
     today_models = {r["model"] for r in daily}
     assert "glm-5-1" in today_models
-    assert "MiniMax-M2.7-highspeed" in today_models
+    assert "MiniMax-M3" in today_models
 
 
 def test_recent_logs(db):

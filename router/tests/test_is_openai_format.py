@@ -63,7 +63,7 @@ class TestIsOpenAIFormat:
     def test_anthropic_top_level_system(self):
         """Anthropic: system is a top-level field, not a messages entry."""
         body = {
-            "model": "mimo-v2.5-pro",
+            "model": "mimo-v2.6-pro",
             "system": "you are helpful",
             "messages": [{"role": "user", "content": "hi"}],
         }
@@ -72,7 +72,7 @@ class TestIsOpenAIFormat:
     def test_anthropic_list_content(self):
         """Anthropic: content is a list of content blocks (text/image)."""
         body = {
-            "model": "mimo-v2.5-pro",
+            "model": "mimo-v2.6-pro",
             "messages": [
                 {
                     "role": "user",
@@ -84,7 +84,7 @@ class TestIsOpenAIFormat:
 
     def test_anthropic_image_content(self):
         body = {
-            "model": "mimo-v2.5-pro",
+            "model": "mimo-v2.6-pro",
             "messages": [
                 {
                     "role": "user",
@@ -99,7 +99,7 @@ class TestIsOpenAIFormat:
 
     def test_anthropic_stop_sequences(self):
         body = {
-            "model": "mimo-v2.5-pro",
+            "model": "mimo-v2.6-pro",
             "stop_sequences": ["END"],
             "messages": [{"role": "user", "content": "hi"}],
         }
